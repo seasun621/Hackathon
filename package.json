@@ -1,0 +1,20 @@
+{
+  "name": "neon-tether",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host=127.0.0.1 --port=43127",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "latest",
+    "three": "latest"
+  },
+  "devDependencies": {
+    "@types/three": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}
