@@ -17,7 +17,6 @@ document.documentElement.classList.toggle('touch-device', touchControlsEnabled);
 
 root.innerHTML = `
   <div id="speedLines" class="speed-lines"></div>
-  <div id="focusFx" class="focus-fx"><span>TIME FRACTURE</span></div>
   <div class="hud">
     <div class="topbar">
       <div>
@@ -56,13 +55,9 @@ root.innerHTML = `
 
     <div class="bottom-hud">
       <div class="meter-stack">
-        <div class="meter">
-          <div class="metric-label meter-action-label"><span>FOCUS</span><b>SPACE</b></div>
-          <div class="meter-track"><div id="focusFill" class="meter-fill"></div></div>
-        </div>
         <div id="staminaMeter" class="meter stamina-meter">
           <div class="meter-label-row">
-            <div class="metric-label meter-action-label"><span>GAS THRUST</span><b>Q</b></div>
+            <div class="metric-label meter-action-label"><span>DUAL GAS BOOST</span><b>Q →</b><b>SPACE ↑</b></div>
             <strong id="staminaValue">100%</strong>
           </div>
           <div class="meter-track stamina-track"><div id="staminaFill" class="meter-fill stamina-fill"></div></div>
@@ -75,7 +70,7 @@ root.innerHTML = `
           <span>SPD <b id="statSpeed">x1.00</b></span>
           <span>GRAV <b id="statGravity">x1.00</b></span>
           <span>DMG IN <b id="statDefense">x1.00</b></span>
-          <span>DASH <b id="statDash">x1.00</b></span>
+          <span>BOOST <b id="statDash">x1.00</b></span>
         </div>
       </div>
       <div id="ropeState" class="rope-state">TETHER // FREE</div>
@@ -94,7 +89,7 @@ root.innerHTML = `
       <button id="touchGrapple" class="touch-action grapple" type="button"><small>HOLD</small>TETHER</button>
       <button id="touchFire" class="touch-action fire" type="button"><small>TAP</small>FIRE</button>
       <button id="touchDash" class="touch-action dash" type="button"><small>30%+</small>BOOST</button>
-      <button id="touchFocus" class="touch-action focus" type="button"><small>HOLD</small>FOCUS</button>
+      <button id="touchJump" class="touch-action jump" type="button"><small>30%+</small>JUMP</button>
       <button id="touchSecondary" class="touch-action secondary" type="button"><small>TAP</small>AUX</button>
     </div>
     <button id="touchPause" class="touch-pause" type="button" aria-label="일시정지">Ⅱ</button>
@@ -112,7 +107,7 @@ root.innerHTML = `
         <div><kbd>E</kbd> 보조 무기</div>
         <div><kbd>WASD</kbd> 공중 보정 / 느린 보행</div>
         <div><kbd>Q</kbd> 스태미나 전량 가스 추진</div>
-        <div><kbd>SPACE</kbd> 포커스</div>
+        <div><kbd>SPACE</kbd> 가스 전량 수직 점프</div>
         <div><kbd>R / ESC</kbd> 재시작 / 일시정지</div>
       </div>
       <div class="mobile-control-hint">

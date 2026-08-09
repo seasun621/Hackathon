@@ -40,7 +40,6 @@ interface HudElements {
   statGravity: HTMLElement;
   statDefense: HTMLElement;
   statDash: HTMLElement;
-  focusFill: HTMLElement;
   staminaMeter: HTMLElement;
   staminaFill: HTMLElement;
   staminaValue: HTMLElement;
@@ -53,7 +52,6 @@ interface HudElements {
   toast: HTMLElement;
   hitFlash: HTMLElement;
   speedLines: HTMLElement;
-  focusFx: HTMLElement;
   vignette: HTMLElement;
   menu: HTMLElement;
   menuEyebrow: HTMLElement;
@@ -153,7 +151,6 @@ export class Game {
   private maxHealth: number = CONFIG.playerBaseHealth;
   private invulnerabilityTimer = 0;
   private autoGlideTimer = 0;
-  private focus = 100;
   private stamina = 100;
   private dashFx = 0;
   private dashTimeRemaining = 0;
@@ -174,7 +171,6 @@ export class Game {
   private damageTimer = 0;
   private impactTimer = 0;
   private bestScore = 0;
-  private simulationScale = 1;
   private readonly bombMarkerElements = new Map<number, HTMLElement>();
   private readonly droneMarkerElements = new Map<number, HTMLElement>();
   private readonly visibleBombMarkerIds = new Set<number>();
@@ -184,7 +180,6 @@ export class Game {
   private primaryCooldown = 0;
   private secondaryCooldown = 0;
   private upgradeOffers: ItemOffer[] = [];
-  private focusing = false;
   private anchorSelectionTimer = 0;
   private bombTrackingTimer = 0;
   private hudTimer = 0;
@@ -216,7 +211,7 @@ export class Game {
     this.addEnvironment();
     this.city = new City(this.scene, this.world, this.renderer.capabilities.getMaxAnisotropy());
     this.targets = new TargetSystem(this.scene);
-    this.drones = new DroneSystem(this.scene);
+    this.drones = new DroneSystem(this.scene, (kind) => this.audio.droneShoot(kind));
 
     this.playerBody = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic()
@@ -323,12 +318,12 @@ export class Game {
     this.updateAnchorSelection(realDt);
     this.updateRopeVisual(realDt);
     this.targets.update(
-      this.mode === 'playing' ? realDt * this.simulationScale : 0,
+      this.mode === 'playing' ? realDt : 0,
       this.playerPosition,
       this.cameraForward,
     );
     this.drones.update(
-      this.mode === 'playing' ? realDt * this.simulationScale : 0,
+      this.mode === 'playing' ? realDt : 0,
       this.playerPosition,
       this.cameraForward,
       this.stage,
@@ -369,15 +364,7 @@ export class Game {
     this.invulnerabilityTimer = Math.max(0, this.invulnerabilityTimer - realDt);
     this.autoGlideTimer = Math.max(0, this.autoGlideTimer - realDt);
 
-    const focusing = this.keys.has('Space') && this.focus > 0;
-    const timeScale = focusing ? CONFIG.slowMotionScale : 1;
-    this.setFocusEffect(focusing);
-    this.simulationScale = timeScale;
-    this.focus = focusing
-      ? Math.max(0, this.focus - CONFIG.focusDrain * realDt)
-      : Math.min(100, this.focus + CONFIG.focusRecharge * realDt);
-
-    const scaledDt = realDt * timeScale;
+    const scaledDt = realDt;
     this.primaryCooldown = Math.max(0, this.primaryCooldown - scaledDt);
     this.secondaryCooldown = Math.max(0, this.secondaryCooldown - scaledDt);
     if (this.rightHeld) this.shoot();
@@ -404,7 +391,6 @@ export class Game {
   }
 
   private updateIdle(realDt: number): void {
-    this.setFocusEffect(false);
     const translation = this.playerBody.translation();
     this.playerPosition.set(translation.x, translation.y, translation.z);
     this.weaponRig.rotation.z = Math.sin(performance.now() * 0.001) * 0.005;
@@ -643,6 +629,46 @@ export class Game {
     if (!initialLaunch) this.showToast(`${Math.round(charge * 100)}%\nGAS BURST`, 'positive');
   }
 
+  private tryJumpBoost(): void {
+    if (this.mode !== 'playing') return;
+    if (this.stamina < CONFIG.dashMinimumStamina) {
+      this.showToast(`JUMP LOCKED\n${Math.floor(this.stamina)}%`, 'negative');
+      this.audio.denied();
+      return;
+    }
+
+    const charge = clamp(this.stamina / 100, 0, 1);
+    const boostMultiplier = this.items.getDashMultiplier();
+    const verticalSpeed = THREE.MathUtils.lerp(
+      CONFIG.jumpBoostMinimumSpeed,
+      CONFIG.jumpBoostMaximumSpeed,
+      charge,
+    ) * boostMultiplier;
+    const velocity = this.playerBody.linvel();
+    this.physicsForward.copy(this.cameraForward);
+    this.physicsForward.y = 0;
+    if (this.physicsForward.lengthSq() < 0.01) this.physicsForward.set(0, 0, -1);
+    this.physicsForward.normalize();
+    const forwardKick = THREE.MathUtils.lerp(5, 11, charge) * boostMultiplier;
+
+    // A vertical gas burst cancels an active forward dash, preserves some
+    // momentum, then launches decisively upward with a small aiming-direction kick.
+    this.dashTimeRemaining = 0;
+    this.playerBody.setLinvel(
+      {
+        x: velocity.x * 0.82 + this.physicsForward.x * forwardKick,
+        y: Math.max(velocity.y * 0.35, verticalSpeed),
+        z: velocity.z * 0.82 + this.physicsForward.z * forwardKick,
+      },
+      true,
+    );
+    this.stamina = 0;
+    this.dashFx = 1;
+    this.shake = Math.max(this.shake, 1.04);
+    this.audio.jumpBoost(charge);
+    this.showToast(`${Math.round(charge * 100)}%\nVERTICAL BURST`, 'positive');
+  }
+
   private updateCamera(dt: number): void {
     const translation = this.playerBody.translation();
     this.playerPosition.set(translation.x, translation.y, translation.z);
@@ -679,13 +705,11 @@ export class Game {
       this.mode === 'playing' && !this.isGrounded,
       speed,
       this.leftHeld,
-      this.focusing,
       dt,
     );
     const targetFov = 74
       + clamp((speed - 16) / 38, 0, 1) * 10
-      + this.dashFx * 14
-      - (this.keys.has('Space') ? 2.5 : 0);
+      + this.dashFx * 14;
     const nextFov = THREE.MathUtils.damp(this.camera.fov, targetFov, 6, dt);
     if (Math.abs(nextFov - this.camera.fov) > 0.01) {
       this.camera.fov = nextFov;
@@ -900,15 +924,6 @@ export class Game {
     }
   }
 
-  private setFocusEffect(active: boolean): void {
-    if (this.focusing === active) return;
-    this.focusing = active;
-    this.audio.setFocus(active);
-    this.hud.focusFx.classList.toggle('active', active);
-    this.hud.speedLines.classList.toggle('focus-mode', active);
-    this.renderer.domElement.classList.toggle('focus-active', active);
-  }
-
   private updateAdaptiveResolution(dt: number): void {
     if (this.mode !== 'playing') {
       this.performanceTimer = 0;
@@ -988,7 +1003,7 @@ export class Game {
     const weapon = this.items.getPrimaryStats();
     this.primaryCooldown = weapon.cooldown;
     this.stats.shots += 1;
-    this.audio.shoot();
+    this.audio.shoot(weapon.id);
     this.recoil = 1;
     this.shake = Math.max(this.shake, 0.24);
     this.flashLife = 0.045;
@@ -1075,7 +1090,8 @@ export class Game {
     if (type === 'drone') {
       this.showDamageNumber(result.position, result.damageDealt, quality, result.destroyed);
     }
-    if (playHitSound && !result.destroyed) this.audio.hit();
+    if (playHitSound && type === 'drone') this.audio.droneHit();
+    else if (playHitSound && !result.destroyed) this.audio.hit();
     if (!result.destroyed) return;
     this.stats.combo += type === 'bomb' ? 3 : 2;
     this.stats.bestCombo = Math.max(this.stats.bestCombo, this.stats.combo);
@@ -1325,6 +1341,7 @@ export class Game {
     this.damageTimer = 0.38;
     this.shake = Math.max(this.shake, 0.76);
     this.showToast(`-${Math.round(damage)} HP\n${source}`, 'negative');
+    if (source === 'DRONE FIRE') this.audio.playerHit();
     if (this.health <= 0) this.finishRun();
   }
 
@@ -1334,7 +1351,6 @@ export class Game {
     this.rightHeld = false;
     this.keys.clear();
     this.detach();
-    this.setFocusEffect(false);
     this.audio.setPaused(true);
     this.upgradeOffers = this.items.rollOffers(3);
     this.hud.upgradeStage.textContent = `STAGE ${String(this.stage + 1).padStart(2, '0')}`;
@@ -1458,9 +1474,7 @@ export class Game {
     this.primaryCooldown = 0;
     this.secondaryCooldown = 0;
     this.rightHeld = false;
-    this.focus = 100;
     this.stamina = 100;
-    this.simulationScale = 1;
     this.physicsAccumulator = 0;
     this.groundRunPhase = 0;
     this.groundRunBlend = 0;
@@ -1563,6 +1577,7 @@ export class Game {
       this.keys.add(event.code);
       if (event.code === 'Space') event.preventDefault();
       if (event.code === 'KeyQ' && !event.repeat) this.tryDash();
+      if (event.code === 'Space' && !event.repeat) this.tryJumpBoost();
       if (event.code === 'KeyE' && !event.repeat) this.useSecondary();
       if (import.meta.env.DEV && event.code === 'KeyU' && !event.repeat && this.mode === 'playing') {
         this.stats.score = this.nextStageScore;
@@ -1642,7 +1657,7 @@ export class Game {
     const fireButton = requiredElement<HTMLButtonElement>('touchFire');
     const secondaryButton = requiredElement<HTMLButtonElement>('touchSecondary');
     const dashButton = requiredElement<HTMLButtonElement>('touchDash');
-    const focusButton = requiredElement<HTMLButtonElement>('touchFocus');
+    const jumpButton = requiredElement<HTMLButtonElement>('touchJump');
     const pauseButton = requiredElement<HTMLButtonElement>('touchPause');
 
     const setMoveKey = (code: string, active: boolean): void => {
@@ -1765,11 +1780,7 @@ export class Game {
     );
     bindHoldButton(secondaryButton, () => this.useSecondary(), () => undefined);
     bindHoldButton(dashButton, () => this.tryDash(), () => undefined);
-    bindHoldButton(
-      focusButton,
-      () => this.keys.add('Space'),
-      () => this.keys.delete('Space'),
-    );
+    bindHoldButton(jumpButton, () => this.tryJumpBoost(), () => undefined);
 
     pauseButton.addEventListener('pointerdown', (event) => {
       event.preventDefault();
@@ -1800,7 +1811,6 @@ export class Game {
     this.touchLookPointerId = null;
     this.leftHeld = false;
     this.rightHeld = false;
-    this.keys.delete('Space');
     this.clearTouchMovement();
     document.getElementById('touchLookZone')?.classList.remove('active');
     document.querySelectorAll('.touch-action.active').forEach((element) => element.classList.remove('active'));
@@ -1946,7 +1956,6 @@ export class Game {
     this.hud.statGravity.textContent = `x${this.items.getGravityMultiplier(false).toFixed(2)}`;
     this.hud.statDefense.textContent = `x${(1 - this.items.getDamageReduction()).toFixed(2)}`;
     this.hud.statDash.textContent = `x${this.items.getDashMultiplier().toFixed(2)}`;
-    this.hud.focusFill.style.transform = `scaleX(${this.focus / 100})`;
     this.hud.staminaFill.style.transform = `scaleX(${this.stamina / 100})`;
     this.hud.staminaValue.textContent = `${Math.round(this.stamina)}%`;
     const dashReady = this.stamina >= CONFIG.dashMinimumStamina;
@@ -2091,7 +2100,6 @@ export class Game {
       statGravity: requiredElement('statGravity'),
       statDefense: requiredElement('statDefense'),
       statDash: requiredElement('statDash'),
-      focusFill: requiredElement('focusFill'),
       staminaMeter: requiredElement('staminaMeter'),
       staminaFill: requiredElement('staminaFill'),
       staminaValue: requiredElement('staminaValue'),
@@ -2104,7 +2112,6 @@ export class Game {
       toast: requiredElement('toast'),
       hitFlash: requiredElement('hitFlash'),
       speedLines: requiredElement('speedLines'),
-      focusFx: requiredElement('focusFx'),
       vignette: requiredElement('vignette'),
       menu: requiredElement('menuScreen'),
       menuEyebrow: requiredElement('menuEyebrow'),

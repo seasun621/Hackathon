@@ -2,9 +2,14 @@ import dashSoundUrl from '../../sound/대쉬.mp3?url';
 import ropeRideSoundUrl from '../../sound/로프 타고다닐때.mp3?url';
 import ropeAttachSoundUrl from '../../sound/벽에 매달리는 로프 발사.mp3?url';
 import musicUrl from '../../sound/브금임시.mp3?url';
-import focusSoundUrl from '../../sound/시간정지.mp3?url';
 import windSoundUrl from '../../sound/활공 바람.mp3?url';
 import bombExplosionSoundUrl from '../../sound/폭탄터짐.mp3?url';
+import jumpSoundUrl from '../../sound/효과음점프.mp3?url';
+import machinegunSoundUrl from '../../sound/기관총.mp3?url';
+import laserSoundUrl from '../../sound/레이저건.mp3?url';
+import droneHitSoundUrl from '../../sound/드론 맞는소리.mp3?url';
+import droneShootSoundUrl from '../../sound/드론 총소리.mp3?url';
+import playerHitSoundUrl from '../../sound/드론한테맞음.mp3?url';
 
 const MUSIC_VOLUME = 0.27;
 
@@ -16,12 +21,16 @@ export class AudioSystem {
   private readonly wind = new Audio(windSoundUrl);
   private readonly ropeAttach = new Audio(ropeAttachSoundUrl);
   private readonly dashBurst = new Audio(dashSoundUrl);
-  private readonly focusBurst = new Audio(focusSoundUrl);
   private readonly bombExplosion = new Audio(bombExplosionSoundUrl);
+  private readonly jumpBurst = new Audio(jumpSoundUrl);
+  private readonly machinegunBurst = new Audio(machinegunSoundUrl);
+  private readonly laserBurst = new Audio(laserSoundUrl);
+  private readonly droneHitBurst = new Audio(droneHitSoundUrl);
+  private readonly droneShootBurst = new Audio(droneShootSoundUrl);
+  private readonly playerHitBurst = new Audio(playerHitSoundUrl);
   private readonly fadeFrames = new Map<HTMLAudioElement, number>();
   private mediaEnabled = false;
   private paused = true;
-  private focusing = false;
   private ropeRideRequested = false;
   private windRequested = false;
   private musicPlayPending = false;
@@ -39,8 +48,13 @@ export class AudioSystem {
     this.wind.volume = 0;
     this.ropeAttach.preload = 'auto';
     this.dashBurst.preload = 'auto';
-    this.focusBurst.preload = 'auto';
     this.bombExplosion.preload = 'auto';
+    this.jumpBurst.preload = 'auto';
+    this.machinegunBurst.preload = 'auto';
+    this.laserBurst.preload = 'auto';
+    this.droneHitBurst.preload = 'auto';
+    this.droneShootBurst.preload = 'auto';
+    this.playerHitBurst.preload = 'auto';
   }
 
   resume(): void {
@@ -75,7 +89,6 @@ export class AudioSystem {
     airborne: boolean,
     speed: number,
     pulling: boolean,
-    focusing: boolean,
     dt: number,
   ): void {
     const speedMix = Math.min(1, Math.max(0, (speed - 4) / 58));
@@ -86,43 +99,39 @@ export class AudioSystem {
     const windTarget = active && airborne && !grappled
       ? 0.08 + speedMix * 0.34
       : 0;
-    const focusRate = focusing ? 0.76 : 1;
     this.updateLoop(
       this.ropeRide,
       ropeTarget,
-      (0.82 + speedMix * 0.42 + (pulling ? 0.08 : 0)) * focusRate,
+      0.82 + speedMix * 0.42 + (pulling ? 0.08 : 0),
       dt,
       'rope',
     );
     this.updateLoop(
       this.wind,
       windTarget,
-      (0.82 + speedMix * 0.5) * focusRate,
+      0.82 + speedMix * 0.5,
       dt,
       'wind',
     );
     this.music.playbackRate = THREE_MATH_DAMP(
       this.music.playbackRate,
-      focusing ? 0.72 : 1,
+      1,
       4.2,
       dt,
     );
   }
 
-  setFocus(active: boolean): void {
-    if (this.focusing === active) return;
-    this.focusing = active;
-    if (!this.mediaEnabled || this.paused) return;
-    if (active) {
-      this.playOneShot(this.focusBurst, 0.78, 0.96, 0.07, 0.58);
-      this.fadeElement(this.music, 0.19, 260);
-    } else {
-      this.fadeElement(this.music, MUSIC_VOLUME, 560);
+  shoot(weaponId: string): void {
+    if (weaponId === 'machinegun') {
+      this.playOneShot(this.machinegunBurst, 0.62, 0.98 + Math.random() * 0.05, 0.008, 0.08);
+      return;
     }
-  }
-
-  shoot(): void {
-    this.tone(115, 0.045, 'square', 0.055, 56);
+    if (weaponId === 'laser') {
+      this.playOneShot(this.laserBurst, 0.58, 0.98 + Math.random() * 0.04, 0.006, 0.08);
+      return;
+    }
+    this.tone(115, 0.075, 'square', 0.075, 48);
+    this.noise(0.11, 0.04, 1250);
   }
 
   attach(): void {
@@ -171,12 +180,37 @@ export class AudioSystem {
     this.noise(duration, 0.045 + power * 0.03, 2400);
   }
 
+  jumpBoost(power = 1): void {
+    const duration = 0.32 + power * 0.2;
+    this.playOneShot(this.jumpBurst, 0.62 + power * 0.3, 0.94 + power * 0.08, 0.018, 0.24);
+    this.tone(78, duration, 'sawtooth', 0.035 + power * 0.025, 1280);
+    this.noise(duration, 0.035 + power * 0.025, 2100);
+  }
+
+  droneShoot(kind: 'scout' | 'assault'): void {
+    this.playOneShot(
+      this.droneShootBurst,
+      kind === 'assault' ? 0.64 : 0.5,
+      (kind === 'assault' ? 0.82 : 1.04) + Math.random() * 0.05,
+      0.006,
+      0.1,
+    );
+  }
+
+  droneHit(): void {
+    this.playOneShot(this.droneHitBurst, 0.64, 0.95 + Math.random() * 0.1, 0.008, 0.13);
+  }
+
+  playerHit(): void {
+    this.playOneShot(this.playerHitBurst, 0.78, 0.98, 0.008, 0.18);
+  }
+
   denied(): void {
     this.tone(115, 0.14, 'square', 0.035, 78);
   }
 
   private startMusic(): void {
-    const target = this.focusing ? 0.19 : MUSIC_VOLUME;
+    const target = MUSIC_VOLUME;
     if (!this.music.paused) {
       this.fadeElement(this.music, target, 560);
       return;
@@ -184,7 +218,7 @@ export class AudioSystem {
 
     // Apply an audible floor and start the fade immediately. Waiting for the
     // play() promise kept the track at volume 0 while the large MP3 buffered;
-    // the next focus input appeared to "unlock" it only because it started a
+    // a later input appeared to "unlock" it only because it started a
     // second volume transition.
     this.music.volume = Math.max(this.music.volume, target * 0.42);
     this.fadeElement(this.music, target, 420);

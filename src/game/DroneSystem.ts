@@ -65,8 +65,9 @@ export class DroneSystem {
   private readonly formationForward = new THREE.Vector3();
   private readonly formationRight = new THREE.Vector3();
   private readonly projection = new THREE.Vector3();
-  private readonly bulletGeometry = new THREE.SphereGeometry(0.28, 7, 5);
-  private readonly bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff315d });
+  private readonly bulletGeometry = new THREE.BoxGeometry(0.34, 0.34, 1.9);
+  private readonly scoutBulletMaterial = new THREE.MeshBasicMaterial({ color: 0xcaff35 });
+  private readonly assaultBulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffe24a });
   private readonly burstGeometry = new THREE.IcosahedronGeometry(1.4, 1);
   private readonly burstRingGeometry = new THREE.TorusGeometry(1.25, 0.12, 6, 28);
   private readonly pendingPlayerDamage: number[] = [];
@@ -74,7 +75,10 @@ export class DroneSystem {
   private nextFormationIndex = 0;
   private spawnCooldown = 1.8;
 
-  constructor(private readonly scene: THREE.Scene) {}
+  constructor(
+    private readonly scene: THREE.Scene,
+    private readonly onShoot: (kind: 'scout' | 'assault') => void = () => undefined,
+  ) {}
 
   reset(): void {
     for (const drone of this.drones) this.scene.remove(drone.group);
@@ -379,34 +383,55 @@ export class DroneSystem {
 
   private createDroneModel(kind: 'scout' | 'assault'): { group: THREE.Group; rotorLeft: THREE.Mesh; rotorRight: THREE.Mesh } {
     const group = new THREE.Group();
-    const dark = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.34, metalness: 0.78 });
-    const armor = new THREE.MeshStandardMaterial({ color: 0xc7d3dc, roughness: 0.44, metalness: 0.52 });
-    const hostile = new THREE.MeshBasicMaterial({ color: 0xff315f });
-    const core = new THREE.Mesh(new THREE.SphereGeometry(1.75, 12, 8), dark);
-    core.scale.set(1.2, 0.78, 1);
+    const dark = new THREE.MeshStandardMaterial({
+      color: 0x071722,
+      roughness: 0.28,
+      metalness: 0.82,
+      emissive: 0x07131b,
+      emissiveIntensity: 0.55,
+    });
+    const armor = new THREE.MeshStandardMaterial({
+      color: kind === 'assault' ? 0xffb61f : 0xffdf36,
+      roughness: 0.34,
+      metalness: 0.46,
+      emissive: 0x5a3c00,
+      emissiveIntensity: kind === 'assault' ? 0.72 : 0.52,
+    });
+    const neon = new THREE.MeshBasicMaterial({ color: 0xb6ff35 });
+    const core = new THREE.Mesh(new THREE.DodecahedronGeometry(1.7, 0), dark);
+    core.scale.set(1.3, 0.72, 1);
     group.add(core);
-    const face = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.5, 0.28), armor);
-    face.position.z = 1.25;
+    const face = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.6, 0.32), armor);
+    face.position.z = 1.3;
     group.add(face);
-    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.16, 0.08), hostile);
-    eye.position.set(0, 0.02, 1.43);
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.18, 0.1), neon);
+    eye.position.set(0, 0.03, 1.49);
     group.add(eye);
+    const crown = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.86, 0.82), armor);
+    crown.position.set(0, 1.15, -0.18);
+    crown.rotation.z = Math.PI * 0.25;
+    group.add(crown);
     for (const x of [-2.25, 2.25]) {
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.24, 0.38), armor);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.3, 0.46), armor);
       arm.position.x = x * 0.48;
       group.add(arm);
+      const signal = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.09, 0.56), neon);
+      signal.position.set(x * 0.72, 0.2, 0.02);
+      group.add(signal);
     }
-    const rotorGeometry = new THREE.TorusGeometry(0.88, 0.1, 6, 18);
-    const rotorLeft = new THREE.Mesh(rotorGeometry, hostile);
+    const rotorGeometry = new THREE.TorusGeometry(0.9, 0.12, 6, 18);
+    const rotorLeft = new THREE.Mesh(rotorGeometry, neon);
     rotorLeft.rotation.x = Math.PI / 2;
     rotorLeft.position.x = -2.15;
     const rotorRight = rotorLeft.clone();
     rotorRight.position.x = 2.15;
     group.add(rotorLeft, rotorRight);
-    const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.19, 1.35, 8), dark);
-    gun.rotation.x = Math.PI / 2;
+    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 1.48), dark);
     gun.position.set(0, -0.7, 1.18);
     group.add(gun);
+    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.46, 0.2), neon);
+    muzzle.position.set(0, -0.7, 1.88);
+    group.add(muzzle);
     if (kind === 'assault') {
       const armorRing = new THREE.Mesh(new THREE.TorusGeometry(1.78, 0.22, 7, 22), armor);
       armorRing.rotation.x = Math.PI / 2;
@@ -418,6 +443,9 @@ export class DroneSystem {
         const cannon = gun.clone();
         cannon.position.set(x, -0.48, 1.25);
         group.add(cannon);
+        const cannonMuzzle = muzzle.clone();
+        cannonMuzzle.position.set(x, -0.48, 1.94);
+        group.add(cannonMuzzle);
       }
       group.scale.setScalar(1.62);
     }
@@ -425,10 +453,15 @@ export class DroneSystem {
   }
 
   private fireAtPlayer(drone: Drone, playerPosition: THREE.Vector3, stage: number): void {
-    const bullet = new THREE.Mesh(this.bulletGeometry, this.bulletMaterial);
-    if (drone.kind === 'assault') bullet.scale.setScalar(1.65);
-    bullet.position.copy(drone.group.position);
-    this.direction.copy(playerPosition).sub(bullet.position).normalize();
+    const bullet = new THREE.Mesh(
+      this.bulletGeometry,
+      drone.kind === 'assault' ? this.assaultBulletMaterial : this.scoutBulletMaterial,
+    );
+    if (drone.kind === 'assault') bullet.scale.set(1.55, 1.55, 1.28);
+    this.direction.copy(playerPosition).sub(drone.group.position).normalize();
+    bullet.position.copy(drone.group.position).addScaledVector(this.direction, 2.8);
+    bullet.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), this.direction);
+    bullet.renderOrder = 4;
     const velocity = this.direction.multiplyScalar(CONFIG.droneBulletSpeed + stage * 1.2).clone();
     this.scene.add(bullet);
     this.bullets.push({
@@ -437,6 +470,7 @@ export class DroneSystem {
       life: 4.8,
       damage: (CONFIG.droneBulletDamage + stage * 1.4) * (drone.kind === 'assault' ? 1.75 : 1),
     });
+    this.onShoot(drone.kind);
   }
 
   private hasClearShot(
@@ -455,7 +489,7 @@ export class DroneSystem {
 
   private createBurst(position: THREE.Vector3): void {
     const source = new THREE.MeshBasicMaterial({
-      color: 0xff315f,
+      color: 0xb8ff37,
       transparent: true,
       opacity: 0.85,
       wireframe: true,
@@ -467,7 +501,7 @@ export class DroneSystem {
     const ring = new THREE.Mesh(
       this.burstRingGeometry,
       new THREE.MeshBasicMaterial({
-        color: 0xffd45d,
+        color: 0xffdf38,
         transparent: true,
         opacity: 0.94,
         blending: THREE.AdditiveBlending,
@@ -494,7 +528,7 @@ export class DroneSystem {
     const sparks = new THREE.Points(
       sparkGeometry,
       new THREE.PointsMaterial({
-        color: 0xffcf63,
+        color: 0xc8ff45,
         size: 0.65,
         transparent: true,
         opacity: 1,
