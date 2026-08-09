@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { RigidBody, World } from '@dimforge/rapier3d-compat';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
-import cloudLayerUrl from '../../assets/environment/natural-cel-cloud-layer-v3.png';
+import cloudLayerUrl from '../../assets/environment/bright-cel-cloud-layer-v4.png';
 import { CONFIG } from './config';
 import {
   MAX_ROAD_WIDTH,
@@ -11,6 +11,7 @@ import {
   createChunkUrbanPlan,
   riverCenterAt,
 } from './UrbanPlan';
+import type { PublicSpaceKind } from './UrbanPlan';
 import {
   createBuildingTraversalAnchors,
   validateAnchorCoverage,
@@ -178,11 +179,12 @@ export class City {
   });
   private readonly roadMaterial: THREE.MeshStandardMaterial;
   private readonly sidewalkMaterial = new THREE.MeshStandardMaterial({
-    color: 0xaaa79f,
+    color: 0xffffff,
     roughness: 0.98,
     metalness: 0,
     polygonOffset: true,
-    polygonOffsetFactor: 1,
+    polygonOffsetFactor: 4,
+    polygonOffsetUnits: 4,
   });
   private readonly diagonalRoadMaterial: THREE.MeshStandardMaterial;
   private readonly carMaterial = new THREE.MeshBasicMaterial({
@@ -281,6 +283,8 @@ export class City {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -2,
     });
+    this.sidewalkMaterial.map = this.createSidewalkTexture();
+    this.sidewalkMaterial.needsUpdate = true;
     this.diagonalRoadMaterial = this.roadMaterial.clone();
     this.diagonalRoadMaterial.polygonOffsetFactor = -3;
     this.diagonalRoadMaterial.polygonOffsetUnits = -5;
@@ -439,10 +443,15 @@ export class City {
     const centerZ = chunkZ * CONFIG.chunkSize;
     const verticalRoadWidth = plan.verticalRoadWidth;
     const horizontalRoadWidth = plan.horizontalRoadWidth;
+    const sidewalkWidthFor = (roadClass: typeof plan.verticalRoad): number => roadClass === 'grand-avenue'
+      ? 6.5
+      : roadClass === 'avenue' ? 5.8 : 5.2;
+    const verticalSidewalkWidth = sidewalkWidthFor(plan.verticalRoad);
+    const horizontalSidewalkWidth = sidewalkWidthFor(plan.horizontalRoad);
     const diagonalDistrict = plan.diagonalBoulevard;
     const lotOuterEdge = CONFIG.chunkSize / 2 - 6;
-    const lotInnerX = verticalRoadWidth / 2 + 3;
-    const lotInnerZ = horizontalRoadWidth / 2 + 3;
+    const lotInnerX = verticalRoadWidth / 2 + verticalSidewalkWidth + 0.8;
+    const lotInnerZ = horizontalRoadWidth / 2 + horizontalSidewalkWidth + 0.8;
     const parcels = createLocalParcelPlans(plan, lotInnerX, lotInnerZ, lotOuterEdge);
     const facadeStyle = Math.abs(chunkSeed(chunkX, chunkZ)) % 4;
     const chunkFacadeMaterial = plan.district === 'waterfront'
@@ -478,19 +487,22 @@ export class City {
       this.getRoadGeometry(verticalRoadWidth, horizontalRoadWidth),
       this.roadMaterial,
     );
-    roads.position.set(centerX, -0.44, centerZ);
+    roads.position.set(centerX, -0.42, centerZ);
     roads.renderOrder = 1;
     const sidewalks = new THREE.Mesh(
-      this.getRoadGeometry(verticalRoadWidth + 7, horizontalRoadWidth + 7),
+      this.getRoadGeometry(
+        verticalRoadWidth + verticalSidewalkWidth * 2,
+        horizontalRoadWidth + horizontalSidewalkWidth * 2,
+      ),
       this.sidewalkMaterial,
     );
-    sidewalks.position.set(centerX, -0.455, centerZ);
+    sidewalks.position.set(centerX, -0.49, centerZ);
     sidewalks.renderOrder = 0;
     const diagonalRoad = diagonalDistrict
       ? new THREE.Mesh(this.diagonalRoadGeometry, this.diagonalRoadMaterial)
       : null;
     if (diagonalRoad) {
-      diagonalRoad.position.set(centerX, -0.438, centerZ);
+      diagonalRoad.position.set(centerX, -0.398, centerZ);
       diagonalRoad.renderOrder = 2;
     }
     const roundaboutIsland = plan.roundabout
@@ -522,6 +534,16 @@ export class City {
       this.treeCanopyMaterial,
       48,
     );
+    const streetFurniture = new THREE.InstancedMesh(
+      this.buildingGeometry,
+      this.roofMaterial,
+      128,
+    );
+    const streetTreeCanopies = new THREE.InstancedMesh(
+      this.treeCanopyGeometry,
+      this.treeCanopyMaterial,
+      48,
+    );
     const transform = new THREE.Object3D();
     const glassColors = [0x526b73, 0x4c626c, 0x566a65, 0x5a5f6b, 0x49646b];
     const brickColors = [0x745048, 0x68463f, 0x7c594b, 0x66504a, 0x7d5d50];
@@ -536,6 +558,8 @@ export class City {
     let facadeIndex = 0;
     let brickFacadeIndex = 0;
     let treeIndex = 0;
+    let streetFurnitureIndex = 0;
+    let streetTreeIndex = 0;
 
     const setInstance = (
       mesh: THREE.InstancedMesh,
@@ -562,7 +586,7 @@ export class City {
       localZ: number,
       spanX: number,
       spanZ: number,
-      plaza: boolean,
+      kind: Exclude<PublicSpaceKind, 'none'>,
     ): void => {
       const x = centerX + localX;
       const z = centerZ + localZ;
@@ -570,7 +594,7 @@ export class City {
         ? 0x697d6d
         : plan.gameplayZone === 'combat-arena'
           ? (plan.arenaVariant === 1 ? 0x887968 : 0x786e6b)
-          : plaza ? 0x999386 : 0x68775f;
+          : kind === 'park' ? 0x68775f : 0x999386;
       setInstance(
         architecturalDetails,
         detailIndex,
@@ -584,7 +608,37 @@ export class City {
       );
       detailIndex += 1;
 
-      const treeCount = plaza ? 2 : 4;
+      // Civic squares get a compact stone plinth and a dark bronze abstract
+      // monument. It is deliberately assembled from shared instances so it
+      // adds identity without introducing unique models or draw calls.
+      if (kind === 'monument') {
+        setInstance(
+          architecturalDetails,
+          detailIndex,
+          x,
+          0.08,
+          z,
+          Math.min(7.2, spanX * 0.24),
+          0.82,
+          Math.min(7.2, spanZ * 0.24),
+          new THREE.Color(0x77746d),
+        );
+        detailIndex += 1;
+        setInstance(
+          roofProps,
+          propIndex,
+          x,
+          4.15,
+          z,
+          1.15,
+          7.1,
+          1.15,
+          new THREE.Color(0x35403c),
+        );
+        propIndex += 1;
+      }
+
+      const treeCount = kind === 'park' ? 4 : 2;
       for (let tree = 0; tree < treeCount; tree += 1) {
         const sideX = tree % 2 === 0 ? -1 : 1;
         const sideZ = tree < 2 ? -1 : 1;
@@ -617,6 +671,141 @@ export class City {
       }
     };
 
+    const streetTreeColor = new THREE.Color(plan.district === 'waterfront' ? 0x5f9168 : 0x537e56);
+    const placeStreetTree = (x: number, z: number, scale = 1): void => {
+      setInstance(
+        streetFurniture,
+        streetFurnitureIndex++,
+        x,
+        1.1 * scale,
+        z,
+        0.42 * scale,
+        2.75 * scale,
+        0.42 * scale,
+        new THREE.Color(0x65503c),
+      );
+      setInstance(
+        streetTreeCanopies,
+        streetTreeIndex++,
+        x,
+        3.55 * scale,
+        z,
+        1.75 * scale,
+        2.05 * scale,
+        1.75 * scale,
+        streetTreeColor.clone().offsetHSL((random() - 0.5) * 0.025, 0, (random() - 0.5) * 0.05),
+      );
+    };
+
+    const placeStreetLamp = (x: number, z: number): void => {
+      setInstance(
+        streetFurniture,
+        streetFurnitureIndex++,
+        x,
+        2.45,
+        z,
+        0.18,
+        5.15,
+        0.18,
+        new THREE.Color(0x343b3d),
+      );
+      setInstance(
+        streetFurniture,
+        streetFurnitureIndex++,
+        x,
+        5.05,
+        z,
+        0.7,
+        0.22,
+        0.42,
+        new THREE.Color(0xe8dec0),
+      );
+    };
+
+    const placeBench = (x: number, z: number, alongX: boolean): void => {
+      setInstance(
+        streetFurniture,
+        streetFurnitureIndex++,
+        x,
+        0.42,
+        z,
+        alongX ? 2.15 : 0.55,
+        0.28,
+        alongX ? 0.55 : 2.15,
+        new THREE.Color(0x66513e),
+      );
+      setInstance(
+        streetFurniture,
+        streetFurnitureIndex++,
+        x + (alongX ? 0 : 0.22),
+        0.78,
+        z + (alongX ? 0.22 : 0),
+        alongX ? 2.15 : 0.18,
+        0.65,
+        alongX ? 0.18 : 2.15,
+        new THREE.Color(0x554637),
+      );
+    };
+
+    const isRiverFurnitureConflict = (x: number, z: number): boolean => Boolean(
+      plan.river
+      && Math.abs(x - riverCenterAt(z)) < plan.river.width / 2 + 3,
+    );
+    const curbColor = new THREE.Color(0xb9b5ab);
+    const verticalCurbLength = (CONFIG.chunkSize - horizontalRoadWidth) / 2 - 5;
+    const horizontalCurbLength = (CONFIG.chunkSize - verticalRoadWidth) / 2 - 5;
+    for (const side of [-1, 1]) {
+      for (const end of [-1, 1]) {
+        setInstance(
+          streetFurniture,
+          streetFurnitureIndex++,
+          centerX + side * (verticalRoadWidth / 2 + 0.18),
+          -0.32,
+          centerZ + end * (horizontalRoadWidth / 2 + 2.5 + verticalCurbLength / 2),
+          0.36,
+          0.16,
+          verticalCurbLength,
+          curbColor,
+        );
+        setInstance(
+          streetFurniture,
+          streetFurnitureIndex++,
+          centerX + end * (verticalRoadWidth / 2 + 2.5 + horizontalCurbLength / 2),
+          -0.32,
+          centerZ + side * (horizontalRoadWidth / 2 + 0.18),
+          horizontalCurbLength,
+          0.16,
+          0.36,
+          curbColor,
+        );
+      }
+    }
+    const streetIntervals = [-52, -36, -20, 20, 36, 52];
+    for (const along of streetIntervals) {
+      if (Math.abs(along) > horizontalRoadWidth / 2 + 8) {
+        for (const side of [-1, 1]) {
+          const x = centerX + side * (verticalRoadWidth / 2 + verticalSidewalkWidth * 0.55);
+          const z = centerZ + along + (random() - 0.5) * 1.8;
+          if (!isRiverFurnitureConflict(x, z)) {
+            placeStreetTree(x, z, 0.88 + random() * 0.2);
+            if (Math.abs(along) === 36) placeStreetLamp(x, z + 3.4);
+            if (along === -52 && side === 1) placeBench(x + 1.15, z, false);
+          }
+        }
+      }
+      if (Math.abs(along) > verticalRoadWidth / 2 + 8) {
+        for (const side of [-1, 1]) {
+          const x = centerX + along + (random() - 0.5) * 1.8;
+          const z = centerZ + side * (horizontalRoadWidth / 2 + horizontalSidewalkWidth * 0.55);
+          if (!isRiverFurnitureConflict(x, z)) {
+            placeStreetTree(x, z, 0.88 + random() * 0.2);
+            if (Math.abs(along) === 36) placeStreetLamp(x + 3.4, z);
+            if (along === 52 && side === -1) placeBench(x, z + 1.15, true);
+          }
+        }
+      }
+    }
+
     for (const parcel of parcels) {
         const { localX, localZ, spanX, spanZ, streetAxis, quadrantIndex } = parcel;
         if (diagonalDistrict && Math.sign(localX) === Math.sign(localZ)) continue;
@@ -630,24 +819,26 @@ export class City {
         const parcelOccupancy = 0.992;
         const densityOpenSpace = !plan.landmark && random() > parcelOccupancy;
         if (riverOverlap || plannedOpenSpace || densityOpenSpace) {
+          const openSpaceKind: Exclude<PublicSpaceKind, 'none'> = riverOverlap
+            ? 'park'
+            : plannedOpenSpace && plan.publicSpaceKind !== 'none'
+              ? plan.publicSpaceKind
+              : 'park';
           addOpenSpace(
             localX,
             localZ,
             spanX,
             spanZ,
-            plannedOpenSpace && (
-              plan.landmark
-              || plan.district === 'civic'
-              || plan.gameplayZone === 'safe-hub'
-              || plan.gameplayZone === 'combat-arena'
-            ),
+            openSpaceKind,
           );
           continue;
         }
         const architectureRoll = random();
         const archetype = chooseBuildingArchetype(plan, quadrantIndex, architectureRoll);
-        const avenue = plan.verticalRoad === 'grand-avenue'
-          || plan.horizontalRoad === 'grand-avenue';
+        const frontageRoad = streetAxis === 'x' ? plan.verticalRoad : plan.horizontalRoad;
+        const roadHeightBonus = frontageRoad === 'grand-avenue'
+          ? 18
+          : frontageRoad === 'avenue' ? 8 : 0;
         const glassTower = archetype !== 'brick-midrise' && archetype !== 'courtyard';
         const brickMidrise = archetype === 'brick-midrise' || archetype === 'courtyard';
         const widthFactor = archetype === 'cylinder' || archetype === 'needle'
@@ -662,8 +853,11 @@ export class City {
           : archetype === 'courtyard'
             ? 0.92 + random() * 0.05
             : 0.84 + random() * 0.12;
-        const width = spanX * widthFactor;
-        const depth = spanZ * depthFactor;
+        const grainCoverage = plan.blockGrain === 'tight'
+          ? 1.02
+          : plan.blockGrain === 'open' ? 0.72 : 0.9;
+        const width = spanX * Math.min(0.98, widthFactor * grainCoverage);
+        const depth = spanZ * Math.min(0.98, depthFactor * grainCoverage);
         const eraHeightFactor = plan.developmentEra === 'historic'
           ? 0.76
           : plan.developmentEra === 'postwar' ? 0.9
@@ -677,7 +871,7 @@ export class City {
               : plan.district === 'civic'
                 ? (48 + random() * 62) * plan.skylineScale
                 : plan.district === 'boulevard'
-                  ? (42 + Math.pow(random(), 0.76) * 66 + (avenue ? 9 : 0))
+                  ? (42 + Math.pow(random(), 0.76) * 66 + roadHeightBonus)
                     * plan.skylineScale
                   : (28 + Math.pow(random(), 0.9) * 42) * plan.skylineScale;
         const targetHeight = plan.landmark
@@ -685,7 +879,15 @@ export class City {
           : rawTargetHeight * plan.blockHeightBias * eraHeightFactor;
         // Keep the street wall close to the road edge. Variation happens along
         // the frontage, not by floating every building around the lot centre.
-        const streetSetback = plan.district === 'neighborhood' ? 2.2 : 0.8;
+        const grainSetback = plan.blockGrain === 'tight'
+          ? 0.35 + random() * 0.8
+          : plan.blockGrain === 'open'
+            ? 4.5 + random() * 4.5
+            : (plan.district === 'neighborhood' ? 2.1 : 1.0) + random() * 1.2;
+        const boulevardSetback = frontageRoad === 'grand-avenue'
+          ? 2.6
+          : frontageRoad === 'avenue' ? 1.1 : 0;
+        const streetSetback = grainSetback + boulevardSetback;
         const x = centerX + (streetAxis === 'x'
           ? (Math.sign(localX) * (lotInnerX + streetSetback + width / 2))
           : localX + (random() - 0.5) * Math.min(1.2, spanX * 0.04));
@@ -1329,6 +1531,14 @@ export class City {
     treeCanopies.instanceMatrix.setUsage(THREE.StaticDrawUsage);
     if (treeCanopies.instanceColor) treeCanopies.instanceColor.needsUpdate = true;
     if (treeIndex > 0) treeCanopies.computeBoundingSphere();
+    streetFurniture.count = streetFurnitureIndex;
+    streetFurniture.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    if (streetFurniture.instanceColor) streetFurniture.instanceColor.needsUpdate = true;
+    if (streetFurnitureIndex > 0) streetFurniture.computeBoundingSphere();
+    streetTreeCanopies.count = streetTreeIndex;
+    streetTreeCanopies.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    if (streetTreeCanopies.instanceColor) streetTreeCanopies.instanceColor.needsUpdate = true;
+    if (streetTreeIndex > 0) streetTreeCanopies.computeBoundingSphere();
     cars.count = carVisualIndex;
     cars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     if (cars.instanceColor) cars.instanceColor.needsUpdate = true;
@@ -1353,6 +1563,8 @@ export class City {
     if (crownIndex > 0) group.add(crowns);
     if (propIndex > 0) group.add(roofProps);
     if (treeIndex > 0) group.add(treeCanopies);
+    if (streetFurnitureIndex > 0) group.add(streetFurniture);
+    if (streetTreeIndex > 0) group.add(streetTreeCanopies);
     if (buildingIndex > 0) {
       meshes.push(buildings);
       this.buildingMeshes.push(buildings);
@@ -1376,7 +1588,7 @@ export class City {
 
   private updateTraffic(traffic: TrafficAnimation, time: number): void {
     const routeLength = CONFIG.chunkSize + 28;
-    const roadSurface = -0.44;
+    const roadSurface = -0.42;
     let instanceIndex = 0;
     for (const car of traffic.cars) {
       const progress = ((car.phase + time * car.speed * car.direction) % routeLength
@@ -1473,19 +1685,23 @@ export class City {
       },
       vertexShader: `
         varying vec2 vUv;
+        varying float vSkyHeight;
         void main() {
           vUv = uv;
+          vSkyHeight = normalize(position).y;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
       fragmentShader: `
         varying vec2 vUv;
+        varying float vSkyHeight;
         uniform sampler2D cloudMap;
         void main() {
           vec4 cloud = texture2D(cloudMap, vUv);
           float lowerPoleFade = smoothstep(0.08, 0.25, vUv.y);
           float upperPoleFade = 1.0 - smoothstep(0.76, 0.94, vUv.y);
-          float naturalCoverage = lowerPoleFade * upperPoleFade;
+          float horizonClearance = smoothstep(0.08, 0.24, vSkyHeight);
+          float naturalCoverage = lowerPoleFade * upperPoleFade * horizonClearance;
           gl_FragColor = vec4(cloud.rgb, cloud.a * naturalCoverage * 0.9);
         }
       `,
@@ -1899,6 +2115,51 @@ export class City {
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.anisotropy = Math.min(8, this.textureAnisotropy);
+    return texture;
+  }
+
+  private createSidewalkTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not create the procedural sidewalk texture.');
+
+    // Warm, slightly beige New York-style concrete. Large slab joints and
+    // restrained wear keep it clearly separate from the blue-gray asphalt.
+    context.fillStyle = '#b7b2a8';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    for (let slab = 0; slab < 24; slab += 1) {
+      const x = (slab * 71) % canvas.width;
+      const y = (slab * 109) % canvas.height;
+      context.fillStyle = slab % 3 === 0
+        ? 'rgba(92, 91, 87, 0.055)'
+        : 'rgba(242, 238, 228, 0.075)';
+      context.fillRect(x, y, 12 + (slab % 4) * 9, 7 + (slab % 3) * 8);
+    }
+    context.strokeStyle = 'rgba(102, 101, 96, 0.24)';
+    context.lineWidth = 1.4;
+    for (let line = 0; line <= canvas.width; line += 64) {
+      context.beginPath();
+      context.moveTo(line, 0);
+      context.lineTo(line, canvas.height);
+      context.stroke();
+    }
+    for (let line = 0; line <= canvas.height; line += 64) {
+      context.beginPath();
+      context.moveTo(0, line);
+      context.lineTo(canvas.width, line);
+      context.stroke();
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(2.2, 4.4);
     texture.magFilter = THREE.LinearFilter;
     texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.anisotropy = Math.min(8, this.textureAnisotropy);

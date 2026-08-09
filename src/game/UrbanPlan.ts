@@ -30,6 +30,8 @@ export type BuildingArchetype =
   | 'brick-midrise';
 
 export type DevelopmentEra = 'historic' | 'postwar' | 'modern' | 'contemporary';
+export type BlockGrain = 'tight' | 'regular' | 'open';
+export type PublicSpaceKind = 'none' | 'park' | 'plaza' | 'monument';
 
 export interface LocalParcelPlan {
   lotIndex: number;
@@ -69,6 +71,8 @@ export interface ChunkUrbanPlan {
   gameplayZone: GameplayZone;
   dangerTier: number;
   arenaVariant: number;
+  blockGrain: BlockGrain;
+  publicSpaceKind: PublicSpaceKind;
 }
 
 export const ROAD_WIDTHS: Record<RoadClass, number> = {
@@ -170,15 +174,35 @@ export function createChunkUrbanPlan(chunkX: number, chunkZ: number): ChunkUrban
     skylineScale = 0.78;
   }
 
+  const grainRoll = positiveModulo(macroHash >> 9, 100) / 100;
+  const blockGrain: BlockGrain = developmentEra === 'historic'
+    ? (grainRoll < 0.68 ? 'tight' : 'regular')
+    : district === 'waterfront' || district === 'civic'
+      ? (grainRoll < 0.58 ? 'open' : 'regular')
+      : district === 'commercial-core'
+        ? (grainRoll < 0.35 ? 'tight' : grainRoll < 0.88 ? 'regular' : 'open')
+        : grainRoll < 0.24 ? 'tight' : grainRoll < 0.78 ? 'regular' : 'open';
+
   const civicOpenLot = hash2D(chunkX, chunkZ) % 4;
   const arenaOpenLots = [gameplay.arenaVariant % 4];
+  const pocketPark = !landmark
+    && !river
+    && !civic
+    && gameplay.kind === 'city'
+    && positiveModulo(hash2D(chunkX + 311, chunkZ - 197), 17) === 0;
+  const publicSpaceKind: PublicSpaceKind = gameplay.kind === 'safe-hub'
+    ? 'monument'
+    : gameplay.kind === 'combat-arena' || landmark
+      ? 'plaza'
+      : civic ? 'monument' : pocketPark ? 'park' : 'none';
+  const publicLot = positiveModulo(hash2D(chunkX - 73, chunkZ + 149), 4);
   const openSpaceLots = gameplay.kind === 'safe-hub'
     ? [0]
     : gameplay.kind === 'combat-arena'
       ? arenaOpenLots
       : landmark
     ? [(landmarkLot + 2) % 4]
-    : civic ? [civicOpenLot] : [];
+    : civic ? [civicOpenLot] : pocketPark ? [publicLot] : [];
 
   return {
     verticalRoad,
@@ -201,6 +225,8 @@ export function createChunkUrbanPlan(chunkX: number, chunkZ: number): ChunkUrban
     gameplayZone: gameplay.kind,
     dangerTier: gameplay.dangerTier,
     arenaVariant: gameplay.arenaVariant,
+    blockGrain,
+    publicSpaceKind,
   };
 }
 
@@ -234,7 +260,10 @@ export function createLocalParcelPlans(
         || plan.district === 'neighborhood';
       const divisions = landmarkLot || openLot
         ? 1
-        : denseDistrict ? (plan.developmentEra === 'historic' ? 3 : 2) : 2;
+        : plan.blockGrain === 'tight'
+          ? (denseDistrict ? 3 : 2)
+          : plan.blockGrain === 'open' ? 1
+            : denseDistrict ? (plan.developmentEra === 'historic' ? 3 : 2) : 2;
 
       for (let division = 0; division < divisions; division += 1) {
         const spanX = streetAxis === 'x' ? fullSpanX : fullSpanX / divisions;
