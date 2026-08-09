@@ -6,6 +6,14 @@ import { CONFIG } from './game/config';
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('App root was not found.');
 const appRoot = root;
+const touchControlsEnabled = (
+  navigator.maxTouchPoints > 0
+  && window.matchMedia('(pointer: coarse)').matches
+) || (
+  import.meta.env.DEV
+  && new URLSearchParams(window.location.search).has('touch-preview')
+);
+document.documentElement.classList.toggle('touch-device', touchControlsEnabled);
 
 root.innerHTML = `
   <div id="speedLines" class="speed-lines"></div>
@@ -59,6 +67,22 @@ root.innerHTML = `
   </div>
   <div id="vignette" class="vignette"></div>
 
+  <div id="touchControls" class="touch-controls" aria-hidden="${String(!touchControlsEnabled)}">
+    <div id="touchLookZone" class="touch-look-zone" aria-label="화면 시점 조작 영역"></div>
+    <div id="touchJoystick" class="touch-joystick" aria-label="이동 조이스틱">
+      <div class="touch-joystick-ring"></div>
+      <div id="touchJoystickKnob" class="touch-joystick-knob"></div>
+      <span>MOVE</span>
+    </div>
+    <div class="touch-actions">
+      <button id="touchGrapple" class="touch-action grapple" type="button"><small>HOLD</small>TETHER</button>
+      <button id="touchFire" class="touch-action fire" type="button"><small>TAP</small>FIRE</button>
+      <button id="touchDash" class="touch-action dash" type="button"><small>30%+</small>BOOST</button>
+      <button id="touchFocus" class="touch-action focus" type="button"><small>HOLD</small>FOCUS</button>
+    </div>
+    <button id="touchPause" class="touch-pause" type="button" aria-label="일시정지">Ⅱ</button>
+  </div>
+
   <section id="menuScreen" class="screen">
     <div class="panel">
       <div id="menuEyebrow" class="eyebrow">90 SECOND SWING / SHOOT PROTOCOL</div>
@@ -72,6 +96,10 @@ root.innerHTML = `
         <div><kbd>Q</kbd> 스태미나 전량 가스 추진</div>
         <div><kbd>SPACE</kbd> 포커스</div>
         <div><kbd>R / ESC</kbd> 재시작 / 일시정지</div>
+      </div>
+      <div class="mobile-control-hint">
+        <strong>TOUCH CONTROL</strong>
+        <span>왼쪽 스틱 이동 · 오른쪽 화면 드래그 시점 · 전용 버튼으로 로프와 사격</span>
       </div>
       <div class="actions">
         <button id="menuButton" type="button">출격</button>

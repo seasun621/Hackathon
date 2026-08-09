@@ -62,6 +62,7 @@ export class Game {
   private readonly audio = new AudioSystem();
   private readonly hud: HudElements;
   private readonly keys = new Set<string>();
+  private readonly touchControlsEnabled = document.documentElement.classList.contains('touch-device');
   private readonly ropeMesh: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshBasicMaterial>;
   private readonly ropeTip: THREE.Mesh<THREE.IcosahedronGeometry, THREE.MeshBasicMaterial>;
   private readonly anchorMarker: THREE.Mesh;
@@ -129,6 +130,10 @@ export class Game {
   private performanceFrames = 0;
   private readonly maximumPixelRatio = Math.min(window.devicePixelRatio, 1.15);
   private currentPixelRatio = this.maximumPixelRatio;
+  private touchMovePointerId: number | null = null;
+  private touchLookPointerId: number | null = null;
+  private touchLookX = 0;
+  private touchLookY = 0;
 
   constructor(root: HTMLElement, world: World) {
     this.world = world;
@@ -692,7 +697,7 @@ export class Game {
     const label = marker.querySelector<HTMLElement>('.bomb-lock-label');
     if (label) {
       label.textContent = track.locked
-        ? 'FIRE NOW // RMB'
+        ? `FIRE NOW // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
         : track.danger
           ? `DANGER // ${Math.round(track.distance)} M`
           : `ALIGN // ${Math.round(track.distance)} M`;
@@ -886,6 +891,7 @@ export class Game {
 
   private beginRun(): void {
     this.mode = 'playing';
+    this.resetTouchControls();
     this.stats = this.blankStats();
     this.timeRemaining = CONFIG.runDuration;
     this.runEndCueStarted = false;
@@ -904,6 +910,7 @@ export class Game {
 
   private finishRun(): void {
     this.mode = 'over';
+    this.resetTouchControls();
     this.audio.setPaused(true, true);
     this.dashTimeRemaining = 0;
     this.detach();
@@ -1015,9 +1022,17 @@ export class Game {
       this.beginRun();
       this.requestPlayLock();
     });
+
+    if (this.touchControlsEnabled) this.bindTouchControls();
   }
 
   private requestPlayLock(): void {
+    if (this.touchControlsEnabled) {
+      if (this.mode === 'paused') this.mode = 'playing';
+      this.audio.setPaused(false);
+      this.hud.menu.classList.add('hidden');
+      return;
+    }
     this.renderer.domElement.requestPointerLock().catch(() => {
       if (this.mode !== 'playing') return;
       this.mode = 'paused';
@@ -1033,6 +1048,177 @@ export class Game {
     this.hud.menuTagline.textContent = '도시는 기다린다. 준비되면 다시 흐름에 올라타자.';
     this.hud.menuButton.textContent = '계속하기';
     this.hud.menu.classList.remove('hidden');
+  }
+
+  private bindTouchControls(): void {
+    const joystick = requiredElement('touchJoystick');
+    const joystickKnob = requiredElement('touchJoystickKnob');
+    const lookZone = requiredElement('touchLookZone');
+    const grappleButton = requiredElement<HTMLButtonElement>('touchGrapple');
+    const fireButton = requiredElement<HTMLButtonElement>('touchFire');
+    const dashButton = requiredElement<HTMLButtonElement>('touchDash');
+    const focusButton = requiredElement<HTMLButtonElement>('touchFocus');
+    const pauseButton = requiredElement<HTMLButtonElement>('touchPause');
+
+    const setMoveKey = (code: string, active: boolean): void => {
+      if (active) this.keys.add(code);
+      else this.keys.delete(code);
+    };
+
+    const updateJoystick = (event: PointerEvent): void => {
+      const bounds = joystick.getBoundingClientRect();
+      const radius = Math.min(bounds.width, bounds.height) * 0.31;
+      const rawX = event.clientX - (bounds.left + bounds.width * 0.5);
+      const rawY = event.clientY - (bounds.top + bounds.height * 0.5);
+      const length = Math.hypot(rawX, rawY);
+      const scale = length > radius ? radius / length : 1;
+      const x = rawX * scale;
+      const y = rawY * scale;
+      const normalizedX = x / radius;
+      const normalizedY = y / radius;
+      const threshold = 0.24;
+      joystickKnob.style.setProperty('--stick-x', `${x.toFixed(1)}px`);
+      joystickKnob.style.setProperty('--stick-y', `${y.toFixed(1)}px`);
+      setMoveKey('KeyA', normalizedX < -threshold);
+      setMoveKey('KeyD', normalizedX > threshold);
+      setMoveKey('KeyW', normalizedY < -threshold);
+      setMoveKey('KeyS', normalizedY > threshold);
+    };
+
+    joystick.addEventListener('pointerdown', (event) => {
+      if (this.mode !== 'playing' || this.touchMovePointerId !== null) return;
+      event.preventDefault();
+      this.touchMovePointerId = event.pointerId;
+      joystick.setPointerCapture(event.pointerId);
+      joystick.classList.add('active');
+      updateJoystick(event);
+    });
+    joystick.addEventListener('pointermove', (event) => {
+      if (event.pointerId !== this.touchMovePointerId) return;
+      event.preventDefault();
+      updateJoystick(event);
+    });
+    const releaseJoystick = (event: PointerEvent): void => {
+      if (event.pointerId !== this.touchMovePointerId) return;
+      this.touchMovePointerId = null;
+      this.clearTouchMovement();
+    };
+    joystick.addEventListener('pointerup', releaseJoystick);
+    joystick.addEventListener('pointercancel', releaseJoystick);
+    joystick.addEventListener('lostpointercapture', releaseJoystick);
+
+    lookZone.addEventListener('pointerdown', (event) => {
+      if (this.mode !== 'playing' || this.touchLookPointerId !== null) return;
+      event.preventDefault();
+      this.touchLookPointerId = event.pointerId;
+      this.touchLookX = event.clientX;
+      this.touchLookY = event.clientY;
+      lookZone.setPointerCapture(event.pointerId);
+      lookZone.classList.add('active');
+    });
+    lookZone.addEventListener('pointermove', (event) => {
+      if (event.pointerId !== this.touchLookPointerId) return;
+      event.preventDefault();
+      const movementX = event.clientX - this.touchLookX;
+      const movementY = event.clientY - this.touchLookY;
+      this.touchLookX = event.clientX;
+      this.touchLookY = event.clientY;
+      this.yaw -= movementX * 0.004;
+      this.pitch = clamp(this.pitch - movementY * 0.0036, -1.43, 1.38);
+    });
+    const releaseLook = (event: PointerEvent): void => {
+      if (event.pointerId !== this.touchLookPointerId) return;
+      this.touchLookPointerId = null;
+      lookZone.classList.remove('active');
+    };
+    lookZone.addEventListener('pointerup', releaseLook);
+    lookZone.addEventListener('pointercancel', releaseLook);
+    lookZone.addEventListener('lostpointercapture', releaseLook);
+
+    const bindHoldButton = (
+      button: HTMLButtonElement,
+      onPress: () => void,
+      onRelease: () => void,
+    ): void => {
+      let pointerId: number | null = null;
+      button.addEventListener('pointerdown', (event) => {
+        if (this.mode !== 'playing' || pointerId !== null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        pointerId = event.pointerId;
+        button.setPointerCapture(event.pointerId);
+        button.classList.add('active');
+        this.audio.resume();
+        onPress();
+      });
+      const release = (event: PointerEvent): void => {
+        if (event.pointerId !== pointerId) return;
+        pointerId = null;
+        button.classList.remove('active');
+        onRelease();
+      };
+      button.addEventListener('pointerup', release);
+      button.addEventListener('pointercancel', release);
+      button.addEventListener('lostpointercapture', release);
+    };
+
+    bindHoldButton(
+      grappleButton,
+      () => {
+        this.leftHeld = true;
+        this.tryAttach();
+      },
+      () => this.detach(),
+    );
+    bindHoldButton(fireButton, () => this.shoot(), () => undefined);
+    bindHoldButton(dashButton, () => this.tryDash(), () => undefined);
+    bindHoldButton(
+      focusButton,
+      () => this.keys.add('Space'),
+      () => this.keys.delete('Space'),
+    );
+
+    pauseButton.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.pauseTouchRun();
+    });
+    window.addEventListener('blur', () => this.pauseTouchRun());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this.pauseTouchRun();
+    });
+  }
+
+  private clearTouchMovement(): void {
+    this.keys.delete('KeyW');
+    this.keys.delete('KeyA');
+    this.keys.delete('KeyS');
+    this.keys.delete('KeyD');
+    const joystick = document.getElementById('touchJoystick');
+    const knob = document.getElementById('touchJoystickKnob');
+    joystick?.classList.remove('active');
+    knob?.style.setProperty('--stick-x', '0px');
+    knob?.style.setProperty('--stick-y', '0px');
+  }
+
+  private resetTouchControls(): void {
+    if (!this.touchControlsEnabled) return;
+    this.touchMovePointerId = null;
+    this.touchLookPointerId = null;
+    this.leftHeld = false;
+    this.keys.delete('Space');
+    this.clearTouchMovement();
+    document.getElementById('touchLookZone')?.classList.remove('active');
+    document.querySelectorAll('.touch-action.active').forEach((element) => element.classList.remove('active'));
+  }
+
+  private pauseTouchRun(): void {
+    if (!this.touchControlsEnabled || this.mode !== 'playing') return;
+    this.resetTouchControls();
+    this.mode = 'paused';
+    this.audio.setPaused(true);
+    this.detach();
+    this.showPauseMenu();
   }
 
   private updateEffects(dt: number): void {
