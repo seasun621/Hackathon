@@ -604,7 +604,9 @@ export class City {
         ? 0x697d6d
         : plan.gameplayZone === 'combat-arena'
           ? (plan.arenaVariant === 1 ? 0x887968 : 0x786e6b)
-          : kind === 'park' ? 0x68775f : 0x999386;
+          : kind === 'park' || kind === 'campus'
+            ? 0x68775f
+            : kind === 'schoolyard' ? 0x8a876f : 0x999386;
       setInstance(
         architecturalDetails,
         detailIndex,
@@ -648,7 +650,7 @@ export class City {
         propIndex += 1;
       }
 
-      const treeCount = kind === 'park' ? 4 : 2;
+      const treeCount = kind === 'park' || kind === 'campus' ? 4 : 2;
       for (let tree = 0; tree < treeCount; tree += 1) {
         const sideX = tree % 2 === 0 ? -1 : 1;
         const sideZ = tree < 2 ? -1 : 1;
@@ -844,7 +846,13 @@ export class City {
           continue;
         }
         const architectureRoll = random();
-        const archetype = chooseBuildingArchetype(plan, quadrantIndex, architectureRoll);
+        const institutionalBlock = plan.publicSpaceKind === 'schoolyard'
+          || plan.publicSpaceKind === 'campus';
+        const archetype = plan.publicSpaceKind === 'schoolyard'
+          ? 'brick-midrise'
+          : plan.publicSpaceKind === 'campus'
+            ? (architectureRoll < 0.62 ? 'courtyard' : 'brick-midrise')
+            : chooseBuildingArchetype(plan, quadrantIndex, architectureRoll);
         const frontageRoad = streetAxis === 'x' ? plan.verticalRoad : plan.horizontalRoad;
         const roadHeightBonus = frontageRoad === 'grand-avenue'
           ? 18
@@ -874,6 +882,10 @@ export class City {
             : plan.developmentEra === 'contemporary' ? 1.08 : 1;
         const rawTargetHeight = plan.landmark
           ? 238 + random() * 78
+          : plan.publicSpaceKind === 'schoolyard'
+            ? 18 + random() * 14
+            : plan.publicSpaceKind === 'campus'
+              ? 22 + random() * 20
           : plan.district === 'commercial-core'
             ? (72 + Math.pow(random(), 0.68) * 76) * plan.skylineScale
             : plan.district === 'waterfront'
@@ -884,9 +896,24 @@ export class City {
                   ? (42 + Math.pow(random(), 0.76) * 66 + roadHeightBonus)
                     * plan.skylineScale
                   : (28 + Math.pow(random(), 0.9) * 42) * plan.skylineScale;
-        const targetHeight = plan.landmark
+        const contextualHeight = plan.landmark || institutionalBlock
           ? rawTargetHeight
           : rawTargetHeight * plan.blockHeightBias * eraHeightFactor;
+        let targetHeight = contextualHeight;
+        if (!plan.landmark && !institutionalBlock) {
+          const heightMix = random();
+          if (contextualHeight > 92 && heightMix < 0.22) {
+            // Older mid-rise fabric surviving between newer towers.
+            targetHeight = 46 + random() * 34;
+          } else if (contextualHeight < 72 && heightMix > 0.76) {
+            // An occasional infill tower prevents low-rise districts from
+            // becoming one uniformly flat slab without erasing their identity.
+            targetHeight = Math.max(contextualHeight * 1.22, 68 + random() * 46);
+          } else {
+            targetHeight = contextualHeight * (0.9 + random() * 0.2);
+          }
+          targetHeight = THREE.MathUtils.clamp(targetHeight, 26, 188);
+        }
         // Keep the street wall close to the road edge. Variation happens along
         // the frontage, not by floating every building around the lot centre.
         const grainSetback = plan.blockGrain === 'tight'
@@ -1709,9 +1736,9 @@ export class City {
         uniform sampler2D cloudMap;
         void main() {
           vec4 cloud = texture2D(cloudMap, vUv);
-          float lowerPoleFade = smoothstep(0.08, 0.25, vUv.y);
+          float lowerPoleFade = smoothstep(0.16, 0.32, vUv.y);
           float upperPoleFade = 1.0 - smoothstep(0.76, 0.94, vUv.y);
-          float horizonClearance = smoothstep(0.08, 0.24, vSkyHeight);
+          float horizonClearance = smoothstep(0.22, 0.4, vSkyHeight);
           float naturalCoverage = lowerPoleFade * upperPoleFade * horizonClearance;
           gl_FragColor = vec4(cloud.rgb, cloud.a * naturalCoverage * 0.9);
         }

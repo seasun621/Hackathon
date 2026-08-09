@@ -31,7 +31,7 @@ export type BuildingArchetype =
 
 export type DevelopmentEra = 'historic' | 'postwar' | 'modern' | 'contemporary';
 export type BlockGrain = 'tight' | 'regular' | 'open';
-export type PublicSpaceKind = 'none' | 'park' | 'plaza' | 'monument';
+export type PublicSpaceKind = 'none' | 'park' | 'plaza' | 'monument' | 'schoolyard' | 'campus';
 
 export interface LocalParcelPlan {
   lotIndex: number;
@@ -185,16 +185,28 @@ export function createChunkUrbanPlan(chunkX: number, chunkZ: number): ChunkUrban
 
   const civicOpenLot = hash2D(chunkX, chunkZ) % 4;
   const arenaOpenLots = [gameplay.arenaVariant % 4];
-  const pocketPark = !landmark
+  const institutionEligible = !landmark
     && !river
     && !civic
-    && gameplay.kind === 'city'
-    && positiveModulo(hash2D(chunkX + 311, chunkZ - 197), 17) === 0;
+    && gameplay.kind === 'city';
+  const school = institutionEligible
+    && district === 'neighborhood'
+    && positiveModulo(hash2D(chunkX + 509, chunkZ - 283), 19) === 0;
+  const campus = institutionEligible
+    && !school
+    && (district === 'neighborhood' || district === 'waterfront')
+    && positiveModulo(hash2D(chunkX - 887, chunkZ + 419), 31) === 0;
+  const pocketPark = institutionEligible
+    && !school
+    && !campus
+    && positiveModulo(hash2D(chunkX + 311, chunkZ - 197), 11) === 0;
   const publicSpaceKind: PublicSpaceKind = gameplay.kind === 'safe-hub'
     ? 'monument'
     : gameplay.kind === 'combat-arena' || landmark
       ? 'plaza'
-      : civic ? 'monument' : pocketPark ? 'park' : 'none';
+      : civic ? 'monument'
+        : school ? 'schoolyard'
+          : campus ? 'campus' : pocketPark ? 'park' : 'none';
   const publicLot = positiveModulo(hash2D(chunkX - 73, chunkZ + 149), 4);
   const openSpaceLots = gameplay.kind === 'safe-hub'
     ? [0]
@@ -202,7 +214,9 @@ export function createChunkUrbanPlan(chunkX: number, chunkZ: number): ChunkUrban
       ? arenaOpenLots
       : landmark
     ? [(landmarkLot + 2) % 4]
-    : civic ? [civicOpenLot] : pocketPark ? [publicLot] : [];
+    : civic ? [civicOpenLot]
+      : campus ? [publicLot, (publicLot + 2) % 4]
+        : school || pocketPark ? [publicLot] : [];
 
   return {
     verticalRoad,
