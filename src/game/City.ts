@@ -47,6 +47,11 @@ interface PendingChunk {
   key: string;
 }
 
+export interface LoadedCityChunk {
+  x: number;
+  z: number;
+}
+
 function seededRandom(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -151,6 +156,7 @@ export class City {
   private readonly wantedChunks = new Set<string>();
   private readonly pendingChunks: PendingChunk[] = [];
   private readonly pendingKeys = new Set<string>();
+  private readonly loadedChunkEvents: LoadedCityChunk[] = [];
   private readonly buildingGeometry = new THREE.BoxGeometry(1, 1, 1);
   private readonly antennaGeometry = new THREE.CylinderGeometry(0.7, 1, 1, 6);
   private readonly cylinderBuildingGeometry = new THREE.CylinderGeometry(1, 1, 1, 10);
@@ -393,6 +399,10 @@ export class City {
 
   getBuildingMeshes(): THREE.Mesh[] {
     return this.buildingMeshes;
+  }
+
+  consumeLoadedChunks(): LoadedCityChunk[] {
+    return this.loadedChunkEvents.splice(0);
   }
 
   findAssistedAnchor(camera: THREE.Camera, playerPosition: THREE.Vector3): THREE.Vector3 | null {
@@ -1372,6 +1382,7 @@ export class City {
 
     this.scene.add(group);
     this.chunks.set(key, { group, bodies, meshes, anchors, centerX, centerZ, traffic });
+    this.loadedChunkEvents.push({ x: chunkX, z: chunkZ });
   }
 
   private updateTraffic(traffic: TrafficAnimation, time: number): void {

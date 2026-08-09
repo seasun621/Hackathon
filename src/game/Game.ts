@@ -3,15 +3,43 @@ import RAPIER, { type Collider, type RigidBody, type World } from '@dimforge/rap
 import { AudioSystem } from './AudioSystem';
 import { City } from './City';
 import { CONFIG, type RunMode, type RunStats } from './config';
-import { TargetSystem, type BombTrack, type ShotResult } from './TargetSystem';
+import {
+  TargetSystem,
+  type BombDamageResult,
+  type BombTrack,
+  type HealthPackResult,
+} from './TargetSystem';
+import { DroneSystem, type DroneDamageResult, type DroneTrack } from './DroneSystem';
+import { ItemSystem, type ItemOffer } from './ItemSystem';
+import { ItemPreviewSystem } from './ItemPreviewSystem';
+import type { AimQuality, CombatTargetRef } from './CombatTypes';
+
+interface PlayerProjectile {
+  mesh: THREE.Mesh;
+  velocity: THREE.Vector3;
+  damage: number;
+  life: number;
+  kind: 'bullet' | 'missile' | 'air-bomb' | 'casing';
+  target?: { type: 'bomb' | 'drone'; id: number };
+  blastRadius?: number;
+  homingStrength?: number;
+}
 
 interface HudElements {
   score: HTMLElement;
   timer: HTMLElement;
+  stage: HTMLElement;
+  healthMeter: HTMLElement;
+  healthFill: HTMLElement;
+  healthValue: HTMLElement;
   combo: HTMLElement;
   comboValue: HTMLElement;
   multiplier: HTMLElement;
   speed: HTMLElement;
+  statSpeed: HTMLElement;
+  statGravity: HTMLElement;
+  statDefense: HTMLElement;
+  statDash: HTMLElement;
   focusFill: HTMLElement;
   staminaMeter: HTMLElement;
   staminaFill: HTMLElement;
@@ -19,6 +47,9 @@ interface HudElements {
   ropeState: HTMLElement;
   anchorReadout: HTMLElement;
   bombMarkers: HTMLElement;
+  enemyMarkers: HTMLElement;
+  damageNumbers: HTMLElement;
+  inventoryBar: HTMLElement;
   toast: HTMLElement;
   hitFlash: HTMLElement;
   speedLines: HTMLElement;
@@ -38,6 +69,11 @@ interface HudElements {
   resultFalls: HTMLElement;
   recordLabel: HTMLElement;
   replayButton: HTMLButtonElement;
+  resultTime: HTMLElement;
+  upgradeScreen: HTMLElement;
+  upgradeStage: HTMLElement;
+  upgradeReels: HTMLElement;
+  itemCards: HTMLButtonElement[];
 }
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -59,6 +95,9 @@ export class Game {
   private readonly playerCollider: Collider;
   private readonly city: City;
   private readonly targets: TargetSystem;
+  private readonly drones: DroneSystem;
+  private readonly items = new ItemSystem();
+  private readonly itemPreviews: ItemPreviewSystem;
   private readonly audio = new AudioSystem();
   private readonly hud: HudElements;
   private readonly keys = new Set<string>();
@@ -73,7 +112,17 @@ export class Game {
   private readonly tracer: THREE.Line;
   private readonly tracerGeometry = new THREE.BufferGeometry();
   private readonly muzzleFlash: THREE.Mesh<THREE.IcosahedronGeometry, THREE.MeshBasicMaterial>;
+  private readonly playerProjectiles: PlayerProjectile[] = [];
+  private readonly playerBulletGeometry = new THREE.SphereGeometry(0.17, 6, 4);
+  private readonly playerBulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffd358 });
+  private readonly casingGeometry = new THREE.BoxGeometry(0.08, 0.18, 0.08);
+  private readonly casingMaterial = new THREE.MeshStandardMaterial({ color: 0xd6a84e, metalness: 0.8, roughness: 0.3 });
+  private readonly missileGeometry = new THREE.CylinderGeometry(0.16, 0.24, 1.2, 7);
+  private readonly missileMaterial = new THREE.MeshBasicMaterial({ color: 0xff8b47 });
+  private readonly airBombGeometry = new THREE.SphereGeometry(0.44, 8, 6);
+  private readonly airBombMaterial = new THREE.MeshBasicMaterial({ color: 0xff3d83 });
   private readonly playerPosition = new THREE.Vector3();
+  private readonly damageProjection = new THREE.Vector3();
   private readonly cameraForward = new THREE.Vector3(0, 0, -1);
   private readonly candidateAnchor = new THREE.Vector3();
   private readonly ropeStart = new THREE.Vector3();
@@ -97,8 +146,13 @@ export class Game {
   private isGrounded = false;
   private mode: RunMode = 'ready';
   private stats: RunStats = this.blankStats();
-  private timeRemaining: number = CONFIG.runDuration;
-  private runEndCueStarted = false;
+  private elapsedTime = 0;
+  private stage = 1;
+  private nextStageScore: number = CONFIG.stageScoreBase;
+  private health: number = CONFIG.playerBaseHealth;
+  private maxHealth: number = CONFIG.playerBaseHealth;
+  private invulnerabilityTimer = 0;
+  private autoGlideTimer = 0;
   private focus = 100;
   private stamina = 100;
   private dashFx = 0;
@@ -112,6 +166,8 @@ export class Game {
   private recoil = 0;
   private leftKick = 0;
   private shake = 0;
+  private groundRunPhase = 0;
+  private groundRunBlend = 0;
   private tracerLife = 0;
   private flashLife = 0;
   private toastTimer = 0;
@@ -120,8 +176,14 @@ export class Game {
   private bestScore = 0;
   private simulationScale = 1;
   private readonly bombMarkerElements = new Map<number, HTMLElement>();
+  private readonly droneMarkerElements = new Map<number, HTMLElement>();
   private readonly visibleBombMarkerIds = new Set<number>();
-  private lockedBombId: number | null = null;
+  private readonly visibleDroneMarkerIds = new Set<number>();
+  private activeCombatTarget: CombatTargetRef | null = null;
+  private rightHeld = false;
+  private primaryCooldown = 0;
+  private secondaryCooldown = 0;
+  private upgradeOffers: ItemOffer[] = [];
   private focusing = false;
   private anchorSelectionTimer = 0;
   private bombTrackingTimer = 0;
@@ -154,6 +216,7 @@ export class Game {
     this.addEnvironment();
     this.city = new City(this.scene, this.world, this.renderer.capabilities.getMaxAnisotropy());
     this.targets = new TargetSystem(this.scene);
+    this.drones = new DroneSystem(this.scene);
 
     this.playerBody = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic()
@@ -230,6 +293,11 @@ export class Game {
     this.createWeaponRig();
 
     this.hud = this.collectHud();
+    this.itemPreviews = new ItemPreviewSystem([
+      requiredElement('itemPreview0'),
+      requiredElement('itemPreview1'),
+      requiredElement('itemPreview2'),
+    ]);
     this.loadBestScore();
     this.bindEvents();
     this.resetPlayer();
@@ -248,7 +316,9 @@ export class Game {
     else this.updateIdle(realDt);
 
     this.city.update(this.playerPosition, this.cameraForward);
+    this.targets.onChunksLoaded(this.city.consumeLoadedChunks(), this.playerPosition);
     this.updateEffects(realDt);
+    this.itemPreviews.update(realDt);
     this.updateCamera(realDt);
     this.updateAnchorSelection(realDt);
     this.updateRopeVisual(realDt);
@@ -257,10 +327,27 @@ export class Game {
       this.playerPosition,
       this.cameraForward,
     );
+    this.drones.update(
+      this.mode === 'playing' ? realDt * this.simulationScale : 0,
+      this.playerPosition,
+      this.cameraForward,
+      this.stage,
+      this.city.getBuildingMeshes(),
+    );
+    let pickup = this.targets.consumePickup();
+    while (pickup) {
+      this.handlePickup(pickup.kind, pickup.score);
+      pickup = this.targets.consumePickup();
+    }
     let bombImpact = this.targets.consumeBombImpact();
     while (bombImpact) {
       this.handleBombImpact();
       bombImpact = this.targets.consumeBombImpact();
+    }
+    let droneDamage = this.drones.consumePlayerDamage();
+    while (droneDamage !== null) {
+      this.takeDamage(droneDamage, 'DRONE FIRE');
+      droneDamage = this.drones.consumePlayerDamage();
     }
     this.scene.updateMatrixWorld();
     this.bombTrackingTimer -= realDt;
@@ -278,15 +365,9 @@ export class Game {
   };
 
   private updatePlaying(realDt: number): void {
-    this.timeRemaining = Math.max(0, this.timeRemaining - realDt);
-    if (!this.runEndCueStarted && this.timeRemaining <= CONFIG.runEndBellLead) {
-      this.runEndCueStarted = true;
-      this.audio.startRunEndCue(CONFIG.runEndBellLead - this.timeRemaining);
-    }
-    if (this.timeRemaining <= 0) {
-      this.finishRun();
-      return;
-    }
+    this.elapsedTime += realDt;
+    this.invulnerabilityTimer = Math.max(0, this.invulnerabilityTimer - realDt);
+    this.autoGlideTimer = Math.max(0, this.autoGlideTimer - realDt);
 
     const focusing = this.keys.has('Space') && this.focus > 0;
     const timeScale = focusing ? CONFIG.slowMotionScale : 1;
@@ -297,6 +378,10 @@ export class Game {
       : Math.min(100, this.focus + CONFIG.focusRecharge * realDt);
 
     const scaledDt = realDt * timeScale;
+    this.primaryCooldown = Math.max(0, this.primaryCooldown - scaledDt);
+    this.secondaryCooldown = Math.max(0, this.secondaryCooldown - scaledDt);
+    if (this.rightHeld) this.shoot();
+    this.updatePlayerProjectiles(scaledDt);
     const physicsStep = 1 / 60;
     this.physicsAccumulator = Math.min(this.physicsAccumulator + scaledDt, physicsStep * 5);
     while (this.physicsAccumulator >= physicsStep) {
@@ -312,6 +397,7 @@ export class Game {
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
     this.stats.topSpeed = Math.max(this.stats.topSpeed, speed);
     this.updateStamina(realDt);
+    if (this.stats.score >= this.nextStageScore) this.enterUpgradeSelection();
     // The street and every rooftop are valid play spaces. This guard now only
     // handles an impossible physics escape below the oversized ground collider.
     if (this.playerPosition.y < -20) this.respawnAfterFall();
@@ -326,6 +412,7 @@ export class Game {
   }
 
   private stepPhysics(dt: number): void {
+    this.world.gravity.y = CONFIG.gravity * this.items.getGravityMultiplier(this.grappleAnchor !== null);
     this.updateGroundedState();
     if (this.dashTimeRemaining > 0) {
       this.dashTimeRemaining = Math.max(0, this.dashTimeRemaining - dt);
@@ -343,6 +430,15 @@ export class Game {
       this.isGrounded = false;
       return;
     }
+    if (this.autoGlideTimer > 0 && !this.grappleAnchor) {
+      const glideForward = this.cameraForward.clone();
+      glideForward.y = Math.max(0.02, glideForward.y * 0.22);
+      glideForward.normalize();
+      this.playerBody.applyImpulse(
+        { x: glideForward.x * 7 * dt, y: 4.5 * dt, z: glideForward.z * 7 * dt },
+        true,
+      );
+    }
     this.physicsForward.copy(this.cameraForward);
     this.physicsForward.y = 0;
     this.physicsForward.normalize();
@@ -356,8 +452,9 @@ export class Game {
     if (hasMoveInput) this.physicsMove.normalize();
     if (this.isGrounded && !this.grappleAnchor) {
       const velocity = this.playerBody.linvel();
-      const targetX = hasMoveInput ? this.physicsMove.x * CONFIG.walkSpeed : 0;
-      const targetZ = hasMoveInput ? this.physicsMove.z * CONFIG.walkSpeed : 0;
+      const moveSpeed = CONFIG.walkSpeed * this.items.getSpeedMultiplier();
+      const targetX = hasMoveInput ? this.physicsMove.x * moveSpeed : 0;
+      const targetZ = hasMoveInput ? this.physicsMove.z * moveSpeed : 0;
       const rate = hasMoveInput ? CONFIG.groundAcceleration : CONFIG.groundDeceleration;
       const maxChange = rate * dt;
       this.playerBody.setLinvel(
@@ -369,7 +466,7 @@ export class Game {
         true,
       );
     } else if (hasMoveInput) {
-      this.physicsMove.multiplyScalar(CONFIG.airAcceleration * dt);
+      this.physicsMove.multiplyScalar(CONFIG.airAcceleration * this.items.getSpeedMultiplier() * dt);
       this.playerBody.applyImpulse(
         { x: this.physicsMove.x, y: this.physicsMove.y, z: this.physicsMove.z },
         true,
@@ -459,8 +556,9 @@ export class Game {
 
     const velocity = this.playerBody.linvel();
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
-    if (speed > CONFIG.maxAirSpeed) {
-      const scale = CONFIG.maxAirSpeed / speed;
+    const maximumAirSpeed = CONFIG.maxAirSpeed * this.items.getSpeedMultiplier();
+    if (speed > maximumAirSpeed) {
+      const scale = maximumAirSpeed / speed;
       this.playerBody.setLinvel(
         { x: velocity.x * scale, y: velocity.y * scale, z: velocity.z * scale },
         true,
@@ -509,16 +607,17 @@ export class Game {
     }
 
     const charge = clamp(this.stamina / 100, 0, 1);
+    const dashMultiplier = this.items.getDashMultiplier();
     const speed = THREE.MathUtils.lerp(
       CONFIG.dashMinimumSpeed,
       CONFIG.dashMaximumSpeed,
       charge,
-    );
+    ) * dashMultiplier;
     const duration = THREE.MathUtils.lerp(
       CONFIG.dashMinimumDuration,
       CONFIG.dashMaximumDuration,
       charge,
-    );
+    ) * (1 + (dashMultiplier - 1) * 0.45);
     if (initialLaunch) this.physicsForward.set(0, 0.18, -1);
     else {
       this.physicsForward.copy(this.cameraForward);
@@ -548,15 +647,32 @@ export class Game {
     const translation = this.playerBody.translation();
     this.playerPosition.set(translation.x, translation.y, translation.z);
     const shakeAmount = this.shake * this.shake * 0.08;
+    const velocity = this.playerBody.linvel();
+    const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
+    const hasMoveInput = this.keys.has('KeyW') || this.keys.has('KeyA')
+      || this.keys.has('KeyS') || this.keys.has('KeyD');
+    const runTarget = this.isGrounded && hasMoveInput
+      ? clamp(horizontalSpeed / Math.max(1, CONFIG.walkSpeed), 0, 1)
+      : 0;
+    this.groundRunBlend = THREE.MathUtils.damp(this.groundRunBlend, runTarget, 11, dt);
+    this.groundRunPhase += dt * (8.4 + horizontalSpeed * 0.72) * Math.max(0.18, this.groundRunBlend);
+    const step = Math.sin(this.groundRunPhase);
+    const bobY = Math.abs(step) * 0.082 * this.groundRunBlend;
+    const bobSide = Math.sin(this.groundRunPhase * 0.5) * 0.034 * this.groundRunBlend;
+    const rightX = Math.cos(this.yaw);
+    const rightZ = -Math.sin(this.yaw);
     this.camera.position.set(
-      translation.x + (Math.random() - 0.5) * shakeAmount,
-      translation.y + 0.18 + (Math.random() - 0.5) * shakeAmount,
-      translation.z + (Math.random() - 0.5) * shakeAmount,
+      translation.x + rightX * bobSide + (Math.random() - 0.5) * shakeAmount,
+      translation.y + 0.18 + bobY + (Math.random() - 0.5) * shakeAmount,
+      translation.z + rightZ * bobSide + (Math.random() - 0.5) * shakeAmount,
     );
-    this.camera.rotation.set(this.pitch, this.yaw, 0);
+    this.camera.rotation.set(
+      this.pitch + Math.cos(this.groundRunPhase * 2) * 0.006 * this.groundRunBlend,
+      this.yaw,
+      -step * 0.009 * this.groundRunBlend,
+    );
     this.camera.getWorldDirection(this.cameraForward);
 
-    const velocity = this.playerBody.linvel();
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
     this.audio.setMotionState(
       this.grappleAnchor !== null,
@@ -578,7 +694,9 @@ export class Game {
 
     this.recoil = THREE.MathUtils.damp(this.recoil, 0, 18, dt);
     this.leftKick = THREE.MathUtils.damp(this.leftKick, 0, 12, dt);
-    this.weaponRig.position.y = Math.sin(performance.now() * 0.008) * Math.min(0.012, speed * 0.00035);
+    this.weaponRig.position.y = Math.sin(performance.now() * 0.008) * Math.min(0.012, speed * 0.00035)
+      - bobY * 0.5;
+    this.weaponRig.position.x = -bobSide * 0.42;
     const rightDevice = this.weaponRig.getObjectByName('right-device');
     const leftDevice = this.weaponRig.getObjectByName('left-device');
     if (rightDevice) {
@@ -658,15 +776,36 @@ export class Game {
   }
 
   private updateBombTracking(): void {
-    const tracks = this.mode === 'playing'
-      ? this.targets.getBombTracks(this.camera, this.city.getBuildingMeshes())
+    const weaponRange = this.items.getPrimaryStats().range;
+    const bombTracks = this.mode === 'playing'
+      ? this.targets.getBombTracks(this.camera, this.city.getBuildingMeshes(), weaponRange)
       : [];
+    const droneTracks = this.mode === 'playing'
+      ? this.drones.getTracks(this.camera, this.city.getBuildingMeshes(), weaponRange)
+      : [];
+    const candidates: CombatTargetRef[] = [];
+    for (const track of bombTracks) {
+      if (track.quality === 'none') continue;
+      const missingHealth = 1 - this.health / Math.max(1, this.maxHealth);
+      const healthPriority = track.kind === 'health' ? (missingHealth > 0.05 ? -0.42 * missingHealth : 0.8) : 0;
+      candidates.push({ type: track.kind, id: track.targetId, quality: track.quality, score: track.score + healthPriority });
+    }
+    for (const track of droneTracks) {
+      if (track.quality === 'none') continue;
+      candidates.push({ type: 'drone', id: track.targetId, quality: track.quality, score: track.score });
+    }
+    candidates.sort((a, b) => {
+      const qualityDifference = (a.quality === 'perfect' ? 0 : 1) - (b.quality === 'perfect' ? 0 : 1);
+      return qualityDifference || a.score - b.score;
+    });
+    this.activeCombatTarget = candidates[0] ?? null;
     this.visibleBombMarkerIds.clear();
-    this.lockedBombId = null;
+    this.visibleDroneMarkerIds.clear();
 
-    for (const track of tracks) {
+    for (const track of bombTracks) {
       this.visibleBombMarkerIds.add(track.targetId);
-      if (track.locked) this.lockedBombId = track.targetId;
+      track.locked = this.activeCombatTarget?.type === track.kind
+        && this.activeCombatTarget.id === track.targetId;
       let marker = this.bombMarkerElements.get(track.targetId);
       if (!marker) {
         marker = document.createElement('div');
@@ -678,10 +817,30 @@ export class Game {
       this.updateBombMarker(marker, track);
     }
 
+    for (const track of droneTracks) {
+      this.visibleDroneMarkerIds.add(track.targetId);
+      track.locked = this.activeCombatTarget?.type === 'drone'
+        && this.activeCombatTarget.id === track.targetId;
+      let marker = this.droneMarkerElements.get(track.targetId);
+      if (!marker) {
+        marker = document.createElement('div');
+        marker.className = 'drone-lock';
+        marker.innerHTML = '<span class="drone-lock-label">HOSTILE DRONE</span><div class="drone-health"><i></i></div>';
+        this.hud.enemyMarkers.append(marker);
+        this.droneMarkerElements.set(track.targetId, marker);
+      }
+      this.updateDroneMarker(marker, track);
+    }
+
     for (const [targetId, marker] of this.bombMarkerElements) {
       if (this.visibleBombMarkerIds.has(targetId)) continue;
       marker.remove();
       this.bombMarkerElements.delete(targetId);
+    }
+    for (const [targetId, marker] of this.droneMarkerElements) {
+      if (this.visibleDroneMarkerIds.has(targetId)) continue;
+      marker.remove();
+      this.droneMarkerElements.delete(targetId);
     }
   }
 
@@ -692,15 +851,52 @@ export class Game {
     marker.style.left = `${x}%`;
     marker.style.top = `${y}%`;
     marker.style.setProperty('--marker-scale', String(scale));
-    marker.classList.toggle('ready', track.locked);
-    marker.classList.toggle('urgent', track.danger && !track.locked);
+    marker.classList.toggle('health-pack', track.kind === 'health');
+    marker.classList.toggle('selected', track.locked);
+    marker.classList.toggle('perfect', track.locked && track.quality === 'perfect');
+    marker.classList.toggle('graze', track.locked && track.quality === 'graze');
+    marker.classList.toggle('distant', !track.inEngageRange);
+    marker.classList.toggle('urgent', track.danger && track.quality === 'none');
+    marker.classList.toggle('distant', !track.inEngageRange);
     const label = marker.querySelector<HTMLElement>('.bomb-lock-label');
     if (label) {
-      label.textContent = track.locked
-        ? `FIRE NOW // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
+      label.textContent = track.kind === 'health' && track.locked && track.quality === 'perfect'
+        ? `MED +${CONFIG.healthPackHealPerfect} // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
+        : track.kind === 'health' && track.locked && track.quality === 'graze'
+          ? `MED +${CONFIG.healthPackHealGraze} // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
+          : track.kind === 'health'
+            ? `MEDKIT // ${Math.round(track.distance)} M`
+            : track.locked && track.quality === 'perfect'
+        ? `DIRECT // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
+        : track.locked && track.quality === 'graze'
+          ? `GRAZE // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
         : track.danger
           ? `DANGER // ${Math.round(track.distance)} M`
-          : `ALIGN // ${Math.round(track.distance)} M`;
+          : !track.inEngageRange
+            ? `CHASE // ${Math.round(track.distance)} M`
+            : `ALIGN // ${Math.round(track.distance)} M`;
+    }
+  }
+
+  private updateDroneMarker(marker: HTMLElement, track: DroneTrack): void {
+    const x = clamp((track.ndcX * 0.5 + 0.5) * 100, 4, 96);
+    const y = clamp((-track.ndcY * 0.5 + 0.5) * 100, 7, 91);
+    marker.style.left = `${x}%`;
+    marker.style.top = `${y}%`;
+    marker.style.setProperty('--health-ratio', String(track.healthRatio));
+    marker.classList.toggle('assault', track.kind === 'assault');
+    marker.classList.toggle('selected', track.locked);
+    marker.classList.toggle('perfect', track.locked && track.quality === 'perfect');
+    marker.classList.toggle('graze', track.locked && track.quality === 'graze');
+    const label = marker.querySelector<HTMLElement>('.drone-lock-label');
+    if (label) {
+      label.textContent = track.locked
+        ? track.quality === 'perfect'
+          ? `${track.kind === 'assault' ? 'HEAVY ' : ''}AUTO DIRECT // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
+          : `${track.kind === 'assault' ? 'HEAVY ' : ''}AUTO GRAZE // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
+        : !track.inEngageRange
+          ? `OUT OF RANGE // ${Math.round(track.distance)} M`
+          : `${track.kind === 'assault' ? 'HEAVY ' : ''}AUTO SCAN // ${Math.round(track.distance)} M`;
     }
   }
 
@@ -788,7 +984,9 @@ export class Game {
   }
 
   private shoot(): void {
-    if (this.mode !== 'playing') return;
+    if (this.mode !== 'playing' || this.primaryCooldown > 0) return;
+    const weapon = this.items.getPrimaryStats();
+    this.primaryCooldown = weapon.cooldown;
     this.stats.shots += 1;
     this.audio.shoot();
     this.recoil = 1;
@@ -798,82 +996,313 @@ export class Game {
     this.camera.updateMatrixWorld();
     const muzzlePosition = new THREE.Vector3();
     this.rightMuzzle.getWorldPosition(muzzlePosition);
-    const result = this.lockedBombId !== null
-      ? this.targets.shootBombById(this.lockedBombId, this.camera.position)
-      : this.targets.shoot(this.camera, this.city.getBuildingMeshes());
-    const tracerEnd = result
-      ? result.position
-      : muzzlePosition.clone().addScaledVector(this.cameraForward, 150);
-    this.showTracer(muzzlePosition, tracerEnd);
-
-    if (!result) {
-      this.stats.combo = 0;
+    const target = this.activeCombatTarget;
+    const targetPosition = target ? this.getCombatTargetPosition(target) : null;
+    if (weapon.id === 'machinegun' && (!target || !targetPosition)) {
+      this.spawnMachinegunRound(muzzlePosition, weapon.damage);
       return;
     }
 
-    this.stats.hits += 1;
-    if (result.kind === 'bomb') this.handleBombDefused(result);
-    else this.handlePositiveHit(result);
+    this.showTracer(
+      muzzlePosition,
+      targetPosition ?? muzzlePosition.clone().addScaledVector(this.cameraForward, 150),
+    );
+    if (!target) return;
+    if (weapon.id === 'machinegun') this.spawnMachinegunCasing(muzzlePosition);
+    const qualityMultiplier = target.quality === 'perfect' ? 1 : 0.45;
+    this.applyCombatDamage(target, weapon.damage, qualityMultiplier);
   }
 
-  private handlePositiveHit(result: ShotResult): void {
-    this.stats.combo += result.kind === 'gold' ? 3 : 1;
+  private handlePickup(kind: 'normal' | 'gold', baseScore: number): void {
+    this.stats.combo += kind === 'gold' ? 2 : 1;
     this.stats.bestCombo = Math.max(this.stats.bestCombo, this.stats.combo);
     const velocity = this.playerBody.linvel();
     const speed = this.isGrounded ? 0 : Math.hypot(velocity.x, velocity.y, velocity.z);
-    const comboMultiplier = this.comboMultiplier();
-    const speedMultiplier = clamp(1 + speed / 38, 1, 2.5);
-    const distanceMultiplier = clamp(result.distance / 42, 0.8, 2.2);
-    const earned = Math.round(
-      result.baseScore * comboMultiplier * speedMultiplier * distanceMultiplier * result.centerBonus,
-    );
+    const earned = Math.round(baseScore * this.comboMultiplier() * clamp(1 + speed / 70, 1, 1.8));
     this.stats.score += earned;
-    const hitLabel = result.kind === 'gold'
-      ? 'GOLD BREAK'
-      : result.centerBonus > 1
-        ? `CENTER ×${result.centerBonus.toFixed(2)}`
-        : 'TARGET BREAK';
-    this.showToast(`+${earned.toLocaleString('ko-KR')}\n${hitLabel}`, 'positive');
+    this.showToast(
+      `+${earned.toLocaleString('ko-KR')}\n${kind === 'gold' ? 'GOLD ENERGY' : 'FLOW ENERGY'}`,
+      'positive',
+    );
     this.punchCombo();
-    this.impactTimer = result.kind === 'gold' ? 0.24 : 0.16;
-    this.shake = Math.max(this.shake, result.kind === 'gold' ? 0.85 : 0.62);
-    if (result.kind === 'gold') this.audio.gold();
+    this.impactTimer = kind === 'gold' ? 0.18 : 0.1;
+    this.shake = Math.max(this.shake, kind === 'gold' ? 0.52 : 0.22);
+    if (kind === 'gold') this.audio.gold();
     else this.audio.hit();
   }
 
-  private handleBombDefused(result: ShotResult): void {
-    this.stats.combo += 2;
-    this.stats.bestCombo = Math.max(this.stats.bestCombo, this.stats.combo);
-    const velocity = this.playerBody.linvel();
-    const speed = this.isGrounded ? 0 : Math.hypot(velocity.x, velocity.y, velocity.z);
-    const earned = Math.round(
-      result.baseScore
-      * clamp(1 + speed / 45, 1, 2.3)
-      * clamp(result.distance / 50, 0.9, 1.9)
-      * result.centerBonus,
+  private applyCombatDamage(target: CombatTargetRef, damage: number, qualityMultiplier: number): void {
+    if (target.type === 'health') {
+      const healthPack = this.targets.activateHealthPackById(target.id, target.quality);
+      if (healthPack) this.handleHealthPack(healthPack);
+      else this.clearCombatMarker(target);
+      return;
+    }
+    const result = target.type === 'bomb'
+      ? this.targets.detonateBombById(target.id, target.quality)
+      : this.drones.damageDroneById(target.id, damage, qualityMultiplier);
+    if (!result) {
+      this.clearCombatMarker(target);
+      return;
+    }
+    this.handleCombatDamage(target.type, result, target.quality);
+  }
+
+  private handleHealthPack(result: HealthPackResult): void {
+    const previousHealth = this.health;
+    this.health = Math.min(this.maxHealth, this.health + result.healing);
+    const restored = Math.max(0, this.health - previousHealth);
+    this.stats.hits += 1;
+    this.impactTimer = 0.2;
+    this.shake = Math.max(this.shake, 0.28);
+    this.showToast(
+      `+${Math.round(restored)} HP\n${result.quality === 'perfect' ? 'DIRECT MEDKIT' : 'GRAZE MEDKIT'}`,
+      'positive',
     );
+    this.audio.gold();
+    this.clearCombatMarker({ type: 'health', id: result.targetId });
+  }
+
+  private handleCombatDamage(
+    type: 'bomb' | 'drone',
+    result: BombDamageResult | DroneDamageResult,
+    quality: AimQuality = 'perfect',
+  ): void {
+    const playHitSound = this.impactTimer <= 0;
+    this.stats.hits += 1;
+    this.impactTimer = quality === 'perfect' ? 0.17 : 0.1;
+    this.shake = Math.max(this.shake, quality === 'perfect' ? 0.48 : 0.22);
+    if (type === 'drone') {
+      this.showDamageNumber(result.position, result.damageDealt, quality, result.destroyed);
+    }
+    if (playHitSound && !result.destroyed) this.audio.hit();
+    if (!result.destroyed) return;
+    this.stats.combo += type === 'bomb' ? 3 : 2;
+    this.stats.bestCombo = Math.max(this.stats.bestCombo, this.stats.combo);
+    const qualityMultiplier = type === 'bomb' ? 1 : quality === 'perfect' ? 1 : 0.48;
+    const earned = Math.round(result.score * this.comboMultiplier() * qualityMultiplier);
     this.stats.score += earned;
-    this.lockedBombId = null;
-    this.showToast(`+${earned.toLocaleString('ko-KR')}\nBOMB DEFUSED`, 'positive');
-    this.impactTimer = 0.28;
-    this.shake = 0.95;
+    this.showToast(
+      `+${earned.toLocaleString('ko-KR')}\n${type === 'bomb' ? 'BOMB DEFUSED' : 'DRONE DOWN'}`,
+      'positive',
+    );
     this.punchCombo();
-    this.audio.defuse();
+    this.clearCombatMarker({ type, id: result.targetId });
+    if (type === 'bomb') {
+      this.audio.defuse();
+    } else {
+      this.audio.gold();
+    }
+  }
+
+  private getCombatTargetPosition(target: CombatTargetRef): THREE.Vector3 | null {
+    if (target.type === 'bomb') return this.targets.getBombPosition(target.id);
+    if (target.type === 'health') return this.targets.getHealthPackPosition(target.id);
+    return this.drones.getTargetPosition(target.id);
+  }
+
+  private spawnMachinegunRound(muzzlePosition: THREE.Vector3, damage: number): void {
+    const bullet = new THREE.Mesh(this.playerBulletGeometry, this.playerBulletMaterial);
+    bullet.position.copy(muzzlePosition);
+    const spread = 0.018;
+    const direction = this.cameraForward.clone().add(
+      new THREE.Vector3(
+        (Math.random() - 0.5) * spread,
+        (Math.random() - 0.5) * spread,
+        (Math.random() - 0.5) * spread,
+      ),
+    ).normalize();
+    const playerVelocity = this.playerBody.linvel();
+    const velocity = direction.multiplyScalar(92 + this.items.getPrimaryStats().level * 7);
+    velocity.add(new THREE.Vector3(playerVelocity.x, playerVelocity.y, playerVelocity.z));
+    this.scene.add(bullet);
+    this.playerProjectiles.push({ mesh: bullet, velocity, damage, life: 2.1, kind: 'bullet' });
+
+    this.spawnMachinegunCasing(muzzlePosition);
+  }
+
+  private spawnMachinegunCasing(muzzlePosition: THREE.Vector3): void {
+    const casing = new THREE.Mesh(this.casingGeometry, this.casingMaterial);
+    casing.position.copy(muzzlePosition).add(new THREE.Vector3(0.14, 0.03, 0));
+    const casingVelocity = new THREE.Vector3(2.5 + Math.random() * 2, 1.8 + Math.random(), 0.4 - Math.random() * 1.4);
+    casingVelocity.applyQuaternion(this.camera.quaternion);
+    this.scene.add(casing);
+    this.playerProjectiles.push({ mesh: casing, velocity: casingVelocity, damage: 0, life: 0.7, kind: 'casing' });
+  }
+
+  private clearCombatMarker(target: Pick<CombatTargetRef, 'type' | 'id'>): void {
+    const markerMap = target.type === 'drone' ? this.droneMarkerElements : this.bombMarkerElements;
+    markerMap.get(target.id)?.remove();
+    markerMap.delete(target.id);
+    if (this.activeCombatTarget?.type === target.type && this.activeCombatTarget.id === target.id) {
+      this.activeCombatTarget = null;
+    }
+  }
+
+  private useSecondary(): void {
+    if (this.mode !== 'playing' || this.secondaryCooldown > 0) return;
+    const weapon = this.items.getSecondaryStats();
+    if (!weapon) {
+      this.showToast('AUX EMPTY\nSELECT SECONDARY', 'negative');
+      this.audio.denied();
+      this.secondaryCooldown = 0.45;
+      return;
+    }
+    this.secondaryCooldown = weapon.cooldown;
+    if (weapon.id === 'katana') {
+      const range = 8.5 + weapon.level * 0.8;
+      const drone = this.drones.findNearestTarget(this.playerPosition, range);
+      const bomb = this.targets.findNearestBomb(this.playerPosition, range);
+      const options = [
+        drone ? { type: 'drone' as const, id: drone.id, position: drone.position } : null,
+        bomb ? { type: 'bomb' as const, id: bomb.id, position: bomb.position } : null,
+      ].filter((value): value is { type: 'drone' | 'bomb'; id: number; position: THREE.Vector3 } => value !== null);
+      options.sort((a, b) => a.position.distanceToSquared(this.playerPosition) - b.position.distanceToSquared(this.playerPosition));
+      const target = options[0];
+      if (!target) {
+        this.showToast('OUT OF RANGE\nKATANA', 'negative');
+        this.audio.denied();
+        return;
+      }
+      const direction = target.position.clone().sub(this.camera.position).normalize();
+      if (direction.dot(this.cameraForward) < 0.28) {
+        this.showToast('FACE TARGET\nKATANA', 'negative');
+        this.audio.denied();
+        return;
+      }
+      const result = target.type === 'drone'
+        ? this.drones.damageDroneById(target.id, weapon.damage)
+        : this.targets.detonateBombById(target.id);
+      if (result) this.handleCombatDamage(target.type, result, 'perfect');
+      this.shake = 1;
+      this.showTracer(this.camera.position, target.position);
+      return;
+    }
+
+    const muzzlePosition = new THREE.Vector3();
+    this.rightMuzzle.getWorldPosition(muzzlePosition);
+    if (weapon.id === 'missile') {
+      const fallbackDrone = this.drones.findNearestTarget(this.playerPosition, 120 + weapon.level * 8);
+      const fallbackBomb = this.targets.findNearestBomb(this.playerPosition, 120 + weapon.level * 8);
+      const activeWeaponTarget: { type: 'bomb' | 'drone'; id: number } | null =
+        this.activeCombatTarget?.type === 'bomb' || this.activeCombatTarget?.type === 'drone'
+          ? { type: this.activeCombatTarget.type, id: this.activeCombatTarget.id }
+          : null;
+      const target = activeWeaponTarget
+        ? { type: activeWeaponTarget.type, id: activeWeaponTarget.id }
+        : fallbackDrone
+          ? { type: 'drone' as const, id: fallbackDrone.id }
+          : fallbackBomb
+            ? { type: 'bomb' as const, id: fallbackBomb.id }
+            : undefined;
+      if (!target) {
+        this.showToast('NO TARGET\nMISSILE', 'negative');
+        this.audio.denied();
+        return;
+      }
+      const missile = new THREE.Mesh(this.missileGeometry, this.missileMaterial);
+      missile.rotation.x = Math.PI / 2;
+      missile.position.copy(muzzlePosition);
+      this.scene.add(missile);
+      this.playerProjectiles.push({
+        mesh: missile,
+        velocity: this.cameraForward.clone().multiplyScalar(48),
+        damage: weapon.damage,
+        life: 5.5,
+        kind: 'missile',
+        target,
+        homingStrength: 3.8 + weapon.level * 0.72,
+      });
+      return;
+    }
+
+    const bomb = new THREE.Mesh(this.airBombGeometry, this.airBombMaterial);
+    bomb.position.copy(muzzlePosition);
+    this.scene.add(bomb);
+    this.playerProjectiles.push({
+      mesh: bomb,
+      velocity: this.cameraForward.clone().multiplyScalar(38),
+      damage: weapon.damage,
+      life: 1.25,
+      kind: 'air-bomb',
+      blastRadius: 13 + weapon.level * 1.6,
+    });
+  }
+
+  private updatePlayerProjectiles(dt: number): void {
+    for (let index = this.playerProjectiles.length - 1; index >= 0; index -= 1) {
+      const projectile = this.playerProjectiles[index];
+      projectile.life -= dt;
+      if (projectile.kind === 'casing') {
+        projectile.velocity.y -= 18 * dt;
+        projectile.mesh.rotation.x += dt * 15;
+        projectile.mesh.rotation.z += dt * 11;
+      } else if (projectile.kind === 'missile' && projectile.target) {
+        const targetPosition = projectile.target.type === 'bomb'
+          ? this.targets.getBombPosition(projectile.target.id)
+          : this.drones.getTargetPosition(projectile.target.id);
+        if (targetPosition) {
+          const desiredVelocity = targetPosition.sub(projectile.mesh.position).normalize().multiplyScalar(58);
+          projectile.velocity.lerp(
+            desiredVelocity,
+            Math.min(1, dt * (projectile.homingStrength ?? 4.5)),
+          );
+          projectile.mesh.lookAt(projectile.mesh.position.clone().add(projectile.velocity));
+          if (projectile.mesh.position.distanceToSquared(targetPosition) < 3.2 * 3.2) {
+            const result = projectile.target.type === 'bomb'
+              ? this.targets.detonateBombById(projectile.target.id)
+              : this.drones.damageDroneById(projectile.target.id, projectile.damage);
+            if (result) this.handleCombatDamage(projectile.target.type, result, 'perfect');
+            this.removePlayerProjectile(index);
+            continue;
+          }
+        }
+      }
+      projectile.mesh.position.addScaledVector(projectile.velocity, dt);
+
+      if (projectile.kind === 'bullet') {
+        const droneHit = this.drones.damageAtPoint(projectile.mesh.position, 1.9, projectile.damage);
+        const bombHit = droneHit ? null : this.targets.detonateBombAtPoint(projectile.mesh.position, 2.1);
+        if (droneHit || bombHit) {
+          if (droneHit) this.handleCombatDamage('drone', droneHit, 'perfect');
+          if (bombHit) this.handleCombatDamage('bomb', bombHit, 'perfect');
+          this.removePlayerProjectile(index);
+          continue;
+        }
+      }
+
+      if (projectile.life > 0) continue;
+      if (projectile.kind === 'air-bomb') {
+        const radius = projectile.blastRadius ?? 14;
+        const droneHits = this.drones.damageInRadius(projectile.mesh.position, radius, projectile.damage);
+        const bombHits = this.targets.detonateBombsInRadius(projectile.mesh.position, radius);
+        for (const result of droneHits) this.handleCombatDamage('drone', result, 'perfect');
+        for (const result of bombHits) this.handleCombatDamage('bomb', result, 'perfect');
+        this.shake = Math.max(this.shake, 0.85);
+      }
+      this.removePlayerProjectile(index);
+    }
+  }
+
+  private removePlayerProjectile(index: number): void {
+    const projectile = this.playerProjectiles[index];
+    this.scene.remove(projectile.mesh);
+    this.playerProjectiles.splice(index, 1);
   }
 
   private handleBombImpact(): void {
     this.stats.combo = 0;
-    this.stats.score = Math.max(0, this.stats.score - 900);
     this.damageTimer = 0.34;
     this.shake = 1;
-    this.showToast('-900\nBOMB IMPACT', 'negative');
     this.audio.bomb();
+    this.takeDamage(28 + this.stage * 2, 'BOMB IMPACT');
   }
 
   private respawnAfterFall(): void {
     this.stats.falls += 1;
     this.stats.combo = 0;
-    this.stats.score = Math.max(0, this.stats.score - 350);
+    this.takeDamage(18 + this.stage, 'FALL DAMAGE');
+    if (this.mode === 'over') return;
     const safeX = Math.round(this.playerPosition.x / CONFIG.chunkSize) * CONFIG.chunkSize;
     const safeZ = Math.round(this.playerPosition.z / CONFIG.chunkSize) * CONFIG.chunkSize;
     this.playerBody.setTranslation({ x: safeX, y: 19, z: safeZ }, true);
@@ -885,33 +1314,174 @@ export class Game {
     this.detach();
     this.damageTimer = 0.28;
     this.shake = 0.8;
-    this.showToast('-350  RECOVER', 'negative');
     this.audio.fall();
+  }
+
+  private takeDamage(rawDamage: number, source: string): void {
+    if (this.mode !== 'playing' || this.invulnerabilityTimer > 0 || rawDamage <= 0) return;
+    const damage = Math.max(1, rawDamage * (1 - this.items.getDamageReduction()));
+    this.health = Math.max(0, this.health - damage);
+    this.stats.combo = 0;
+    this.damageTimer = 0.38;
+    this.shake = Math.max(this.shake, 0.76);
+    this.showToast(`-${Math.round(damage)} HP\n${source}`, 'negative');
+    if (this.health <= 0) this.finishRun();
+  }
+
+  private enterUpgradeSelection(): void {
+    if (this.mode !== 'playing') return;
+    this.mode = 'upgrade';
+    this.rightHeld = false;
+    this.keys.clear();
+    this.detach();
+    this.setFocusEffect(false);
+    this.audio.setPaused(true);
+    this.upgradeOffers = this.items.rollOffers(3);
+    this.hud.upgradeStage.textContent = `STAGE ${String(this.stage + 1).padStart(2, '0')}`;
+    this.hud.upgradeReels.classList.add('rolling');
+    this.hud.upgradeScreen.classList.remove('hidden');
+    this.hud.itemCards.forEach((card, index) => this.populateItemCard(card, this.upgradeOffers[index]));
+    this.itemPreviews.show(this.upgradeOffers);
+    window.setTimeout(() => this.hud.upgradeReels.classList.remove('rolling'), 620);
+    if (document.pointerLockElement === this.renderer.domElement) void document.exitPointerLock();
+  }
+
+  private populateItemCard(card: HTMLButtonElement, offer: ItemOffer | undefined): void {
+    if (!offer) {
+      card.disabled = true;
+      return;
+    }
+    card.disabled = false;
+    const { definition } = offer;
+    card.className = `item-card category-${definition.category}`;
+    card.classList.toggle('will-replace', Boolean(offer.replacedItem));
+    card.classList.toggle('is-upgrade', offer.status === 'UPGRADE');
+    card.style.setProperty('--item-color', definition.color);
+    const category = card.querySelector<HTMLElement>('.item-category');
+    const status = card.querySelector<HTMLElement>('.item-status');
+    const name = card.querySelector<HTMLElement>('.item-name');
+    const level = card.querySelector<HTMLElement>('.item-level');
+    const description = card.querySelector<HTMLElement>('.item-description');
+    const stats = card.querySelector<HTMLElement>('.item-stats');
+    const replace = card.querySelector<HTMLElement>('.item-replace');
+    if (category) category.textContent = definition.category.toUpperCase();
+    if (status) {
+      status.textContent = offer.status === 'NEW'
+        ? 'NEW GEAR'
+        : offer.status === 'UPGRADE'
+          ? 'LEVEL UP'
+          : offer.status === 'REPLACE'
+            ? 'REPLACE'
+            : 'INSTANT USE';
+    }
+    if (name) name.textContent = definition.name;
+    if (level) level.textContent = definition.maxLevel === 0 ? 'ONE SHOT' : `LV.${offer.nextLevel}`;
+    if (description) description.textContent = definition.description;
+    if (stats) stats.textContent = this.items.describeOffer(offer);
+    if (replace) {
+      replace.textContent = offer.replacedItem
+        ? `REPLACEMENT REQUIRED // ${offer.replacedItem.name}`
+        : definition.slot === 'primary'
+          ? 'PRIMARY WEAPON SLOT // RMB'
+          : definition.slot === 'secondary'
+            ? 'SECONDARY WEAPON SLOT // E'
+            : definition.slot === 'equipment'
+              ? 'EQUIPMENT SLOT // ONE ONLY'
+              : 'PASSIVE SLOT // STACKABLE';
+    }
+  }
+
+  private getStageScoreGate(stage: number): number {
+    const intervalCount = Math.max(1, Math.floor(stage));
+    return intervalCount * CONFIG.stageScoreBase
+      + CONFIG.stageScoreGrowth * intervalCount * (intervalCount - 1) * 0.5;
+  }
+
+  private selectUpgrade(index: number): void {
+    if (this.mode !== 'upgrade') return;
+    const offer = this.upgradeOffers[index];
+    if (!offer) return;
+    const result = this.items.applyOffer(offer);
+    const previousMaxHealth = this.maxHealth;
+    this.maxHealth = CONFIG.playerBaseHealth
+      + this.items.getPermanentHealthBonus()
+      + this.items.getEquipmentHealthBonus();
+    const armorCapacityHeal = result.definition.id === 'armor'
+      ? Math.max(0, this.maxHealth - previousMaxHealth)
+      : 0;
+    this.health = clamp(this.health + result.instantHeal + armorCapacityHeal, 0, this.maxHealth);
+    this.stage += 1;
+    this.nextStageScore = this.getStageScoreGate(this.stage);
+    this.invulnerabilityTimer = CONFIG.stageTransitionDuration;
+    this.autoGlideTimer = CONFIG.stageTransitionDuration;
+    this.primaryCooldown = 0;
+    this.secondaryCooldown = 0;
+    this.mode = 'playing';
+    this.hud.upgradeScreen.classList.add('hidden');
+    this.itemPreviews.hide();
+    this.updateInventoryHud();
+    this.audio.setPaused(false);
+    this.audio.resume();
+    const launch = this.cameraForward.clone();
+    launch.y = clamp(launch.y, 0.08, 0.35);
+    if (launch.lengthSq() < 0.01) launch.set(0, 0.12, -1);
+    launch.normalize().multiplyScalar(31 * this.items.getSpeedMultiplier());
+    this.playerBody.setLinvel({ x: launch.x, y: launch.y, z: launch.z }, true);
+    this.showToast(`STAGE ${String(this.stage).padStart(2, '0')}\n${result.definition.name}`, 'positive');
+    this.requestPlayLock();
+  }
+
+  private updateInventoryHud(): void {
+    this.hud.inventoryBar.replaceChildren();
+    for (const item of this.items.getOwnedItems()) {
+      const icon = document.createElement('div');
+      icon.className = `inventory-item category-${item.definition.category}`;
+      icon.style.setProperty('--item-color', item.definition.color);
+      icon.title = `${item.definition.name} LV.${item.level}`;
+      icon.innerHTML = `<span class="inventory-name">${item.definition.name}</span><b class="inventory-level"><small>LEVEL</small>${item.level}</b>`;
+      this.hud.inventoryBar.append(icon);
+    }
   }
 
   private beginRun(): void {
     this.mode = 'playing';
     this.resetTouchControls();
     this.stats = this.blankStats();
-    this.timeRemaining = CONFIG.runDuration;
-    this.runEndCueStarted = false;
+    this.elapsedTime = 0;
+    this.stage = 1;
+    this.nextStageScore = this.getStageScoreGate(1);
+    this.items.reset();
+    this.maxHealth = CONFIG.playerBaseHealth;
+    this.health = this.maxHealth;
+    this.invulnerabilityTimer = 1.25;
+    this.autoGlideTimer = 0;
+    this.primaryCooldown = 0;
+    this.secondaryCooldown = 0;
+    this.rightHeld = false;
     this.focus = 100;
     this.stamina = 100;
     this.simulationScale = 1;
     this.physicsAccumulator = 0;
+    this.groundRunPhase = 0;
+    this.groundRunBlend = 0;
     this.targets.reset();
+    this.drones.reset();
+    while (this.playerProjectiles.length > 0) this.removePlayerProjectile(this.playerProjectiles.length - 1);
     this.resetPlayer();
-    this.audio.resetRunEndCue();
     this.audio.resume();
     this.tryDash(true);
+    this.updateInventoryHud();
+    this.itemPreviews.hide();
+    this.hud.upgradeScreen.classList.add('hidden');
     this.hud.results.classList.add('hidden');
     this.hud.menu.classList.add('hidden');
   }
 
   private finishRun(): void {
     this.mode = 'over';
+    this.rightHeld = false;
     this.resetTouchControls();
-    this.audio.setPaused(true, true);
+    this.audio.setPaused(true);
     this.dashTimeRemaining = 0;
     this.detach();
     const accuracy = this.stats.shots > 0 ? Math.round((this.stats.hits / this.stats.shots) * 100) : 0;
@@ -930,6 +1500,7 @@ export class Game {
     this.hud.resultCombo.textContent = `x${this.stats.bestCombo}`;
     this.hud.resultSpeed.textContent = `${Math.round(this.stats.topSpeed * 3.6)} km/h`;
     this.hud.resultFalls.textContent = String(this.stats.falls);
+    this.hud.resultTime.textContent = this.formatElapsedTime(this.elapsedTime);
     this.hud.recordLabel.textContent = isRecord ? 'NEW PERSONAL RECORD' : `BEST ${this.bestScore.toLocaleString('ko-KR')}`;
     this.hud.recordLabel.classList.toggle('new-record', isRecord);
     this.hud.results.classList.remove('hidden');
@@ -972,11 +1543,15 @@ export class Game {
         this.leftHeld = true;
         this.tryAttach();
       }
-      if (event.button === 2) this.shoot();
+      if (event.button === 2) {
+        this.rightHeld = true;
+        this.shoot();
+      }
     });
 
     document.addEventListener('mouseup', (event) => {
       if (event.button === 0) this.detach();
+      if (event.button === 2) this.rightHeld = false;
     });
 
     document.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -988,6 +1563,11 @@ export class Game {
       this.keys.add(event.code);
       if (event.code === 'Space') event.preventDefault();
       if (event.code === 'KeyQ' && !event.repeat) this.tryDash();
+      if (event.code === 'KeyE' && !event.repeat) this.useSecondary();
+      if (import.meta.env.DEV && event.code === 'KeyU' && !event.repeat && this.mode === 'playing') {
+        this.stats.score = this.nextStageScore;
+        this.enterUpgradeSelection();
+      }
       if (event.code === 'KeyR' && document.pointerLockElement === this.renderer.domElement) this.beginRun();
     });
     document.addEventListener('keyup', (event) => this.keys.delete(event.code));
@@ -1002,6 +1582,7 @@ export class Game {
       }
       this.keys.clear();
       this.leftHeld = false;
+      this.rightHeld = false;
       if (this.mode === 'playing') {
         this.mode = 'paused';
         this.audio.setPaused(true);
@@ -1021,6 +1602,9 @@ export class Game {
     this.hud.replayButton.addEventListener('click', () => {
       this.beginRun();
       this.requestPlayLock();
+    });
+    this.hud.itemCards.forEach((card, index) => {
+      card.addEventListener('click', () => this.selectUpgrade(index));
     });
 
     if (this.touchControlsEnabled) this.bindTouchControls();
@@ -1056,6 +1640,7 @@ export class Game {
     const lookZone = requiredElement('touchLookZone');
     const grappleButton = requiredElement<HTMLButtonElement>('touchGrapple');
     const fireButton = requiredElement<HTMLButtonElement>('touchFire');
+    const secondaryButton = requiredElement<HTMLButtonElement>('touchSecondary');
     const dashButton = requiredElement<HTMLButtonElement>('touchDash');
     const focusButton = requiredElement<HTMLButtonElement>('touchFocus');
     const pauseButton = requiredElement<HTMLButtonElement>('touchPause');
@@ -1170,7 +1755,15 @@ export class Game {
       },
       () => this.detach(),
     );
-    bindHoldButton(fireButton, () => this.shoot(), () => undefined);
+    bindHoldButton(
+      fireButton,
+      () => {
+        this.rightHeld = true;
+        this.shoot();
+      },
+      () => { this.rightHeld = false; },
+    );
+    bindHoldButton(secondaryButton, () => this.useSecondary(), () => undefined);
     bindHoldButton(dashButton, () => this.tryDash(), () => undefined);
     bindHoldButton(
       focusButton,
@@ -1206,6 +1799,7 @@ export class Game {
     this.touchMovePointerId = null;
     this.touchLookPointerId = null;
     this.leftHeld = false;
+    this.rightHeld = false;
     this.keys.delete('Space');
     this.clearTouchMovement();
     document.getElementById('touchLookZone')?.classList.remove('active');
@@ -1245,6 +1839,10 @@ export class Game {
     this.impactTimer -= dt;
     this.hud.vignette.classList.toggle('damage', this.damageTimer > 0);
     this.hud.vignette.classList.toggle('impact', this.impactTimer > 0);
+    this.hud.vignette.classList.toggle(
+      'critical',
+      this.mode === 'playing' && this.health / Math.max(1, this.maxHealth) <= 0.25,
+    );
   }
 
   private showTracer(start: THREE.Vector3, end: THREE.Vector3): void {
@@ -1255,6 +1853,29 @@ export class Game {
     this.tracerGeometry.computeBoundingSphere();
     this.tracerLife = 0.08;
     this.tracer.visible = true;
+  }
+
+  private showDamageNumber(
+    position: THREE.Vector3,
+    damage: number,
+    quality: AimQuality,
+    destroyed: boolean,
+  ): void {
+    this.damageProjection.copy(position).project(this.camera);
+    if (
+      this.damageProjection.z < -1
+      || this.damageProjection.z > 1
+      || Math.abs(this.damageProjection.x) > 1.15
+      || Math.abs(this.damageProjection.y) > 1.15
+    ) return;
+    const number = document.createElement('div');
+    number.className = `damage-number ${quality} ${destroyed ? 'destroyed' : ''}`;
+    number.style.left = `${(this.damageProjection.x * 0.5 + 0.5) * 100}%`;
+    number.style.top = `${(-this.damageProjection.y * 0.5 + 0.5) * 100}%`;
+    number.style.setProperty('--damage-drift', `${(Math.random() - 0.5) * 34}px`);
+    number.innerHTML = `<strong>-${Math.max(1, Math.round(damage))}</strong><span>${destroyed ? 'BREAK' : quality === 'perfect' ? 'DIRECT' : 'GRAZE'}</span>`;
+    this.hud.damageNumbers.append(number);
+    window.setTimeout(() => number.remove(), 720);
   }
 
   private showToast(message: string, kind: 'positive' | 'negative'): void {
@@ -1311,11 +1932,20 @@ export class Game {
     const velocity = this.playerBody.linvel();
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
     this.hud.score.textContent = this.stats.score.toLocaleString('ko-KR').padStart(6, '0');
-    this.hud.timer.textContent = `${Math.ceil(this.timeRemaining)}`;
-    this.hud.timer.classList.toggle('danger', this.mode === 'playing' && this.timeRemaining <= 10);
+    this.hud.timer.textContent = this.formatElapsedTime(this.elapsedTime);
+    this.hud.stage.textContent = `STAGE ${String(this.stage).padStart(2, '0')}`;
+    const healthRatio = clamp(this.health / Math.max(1, this.maxHealth), 0, 1);
+    this.hud.healthFill.style.transform = `scaleX(${healthRatio})`;
+    this.hud.healthValue.textContent = `${Math.ceil(this.health)} / ${Math.round(this.maxHealth)}`;
+    this.hud.healthMeter.classList.toggle('critical', healthRatio <= 0.25);
+    this.hud.healthMeter.classList.toggle('invulnerable', this.invulnerabilityTimer > 0);
     this.hud.comboValue.textContent = `x${this.stats.combo}`;
     this.hud.multiplier.textContent = `${this.comboMultiplier().toFixed(2)} MULTI`;
     this.hud.speed.textContent = String(Math.round(speed * 3.6));
+    this.hud.statSpeed.textContent = `x${this.items.getSpeedMultiplier().toFixed(2)}`;
+    this.hud.statGravity.textContent = `x${this.items.getGravityMultiplier(false).toFixed(2)}`;
+    this.hud.statDefense.textContent = `x${(1 - this.items.getDamageReduction()).toFixed(2)}`;
+    this.hud.statDash.textContent = `x${this.items.getDashMultiplier().toFixed(2)}`;
     this.hud.focusFill.style.transform = `scaleX(${this.focus / 100})`;
     this.hud.staminaFill.style.transform = `scaleX(${this.stamina / 100})`;
     this.hud.staminaValue.textContent = `${Math.round(this.stamina)}%`;
@@ -1336,6 +1966,12 @@ export class Game {
       `${Math.max(0.1, 0.34 - edgeIntensity * 0.16 - this.dashFx * 0.08).toFixed(2)}s`,
     );
     this.hud.speedLines.classList.toggle('dash', this.dashFx > 0.12);
+  }
+
+  private formatElapsedTime(seconds: number): string {
+    const wholeSeconds = Math.max(0, Math.floor(seconds));
+    const minutes = Math.floor(wholeSeconds / 60);
+    return `${String(minutes).padStart(2, '0')}:${String(wholeSeconds % 60).padStart(2, '0')}`;
   }
 
   private comboMultiplier(): number {
@@ -1443,10 +2079,18 @@ export class Game {
     return {
       score: requiredElement('scoreValue'),
       timer: requiredElement('timerValue'),
+      stage: requiredElement('stageValue'),
+      healthMeter: requiredElement('healthMeter'),
+      healthFill: requiredElement('healthFill'),
+      healthValue: requiredElement('healthValue'),
       combo: requiredElement('combo'),
       comboValue: requiredElement('comboValue'),
       multiplier: requiredElement('multiplier'),
       speed: requiredElement('speedValue'),
+      statSpeed: requiredElement('statSpeed'),
+      statGravity: requiredElement('statGravity'),
+      statDefense: requiredElement('statDefense'),
+      statDash: requiredElement('statDash'),
       focusFill: requiredElement('focusFill'),
       staminaMeter: requiredElement('staminaMeter'),
       staminaFill: requiredElement('staminaFill'),
@@ -1454,6 +2098,9 @@ export class Game {
       ropeState: requiredElement('ropeState'),
       anchorReadout: requiredElement('anchorReadout'),
       bombMarkers: requiredElement('bombMarkers'),
+      enemyMarkers: requiredElement('enemyMarkers'),
+      damageNumbers: requiredElement('damageNumbers'),
+      inventoryBar: requiredElement('inventoryBar'),
       toast: requiredElement('toast'),
       hitFlash: requiredElement('hitFlash'),
       speedLines: requiredElement('speedLines'),
@@ -1471,8 +2118,13 @@ export class Game {
       resultCombo: requiredElement('resultCombo'),
       resultSpeed: requiredElement('resultSpeed'),
       resultFalls: requiredElement('resultFalls'),
+      resultTime: requiredElement('resultTime'),
       recordLabel: requiredElement('recordLabel'),
       replayButton: requiredElement<HTMLButtonElement>('replayButton'),
+      upgradeScreen: requiredElement('upgradeScreen'),
+      upgradeStage: requiredElement('upgradeStageValue'),
+      upgradeReels: requiredElement('upgradeReels'),
+      itemCards: Array.from(document.querySelectorAll<HTMLButtonElement>('.item-card')),
     };
   }
 

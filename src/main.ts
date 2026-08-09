@@ -24,7 +24,14 @@ root.innerHTML = `
         <div class="metric-label">SCORE</div>
         <div id="scoreValue" class="score-value">000000</div>
       </div>
-      <div id="timerValue" class="timer">90</div>
+      <div class="center-status">
+        <div id="stageValue" class="stage-value">STAGE 01</div>
+        <div id="timerValue" class="timer">00:00</div>
+        <div id="healthMeter" class="health-meter">
+          <span id="healthValue">100 / 100</span>
+          <div class="health-track"><div id="healthFill" class="health-fill"></div></div>
+        </div>
+      </div>
       <div class="run-stats">
         <div class="metric-label">LIVE MULTIPLIER</div>
         <strong id="multiplier">1.00 MULTI</strong>
@@ -32,6 +39,9 @@ root.innerHTML = `
     </div>
 
     <div id="bombMarkers" class="bomb-markers"></div>
+    <div id="enemyMarkers" class="enemy-markers"></div>
+    <div id="damageNumbers" class="damage-numbers"></div>
+    <div id="inventoryBar" class="inventory-bar"></div>
     <div id="anchorReadout" class="anchor-readout">ASSIST ANCHOR</div>
     <div id="combo" class="combo">
       <span class="metric-label">HIT FLOW</span>
@@ -61,6 +71,12 @@ root.innerHTML = `
       <div class="speed-block">
         <div class="metric-label">VELOCITY</div>
         <div class="speed-number"><span id="speedValue">0</span> <small>km/h</small></div>
+        <div id="playerStats" class="player-stats">
+          <span>SPD <b id="statSpeed">x1.00</b></span>
+          <span>GRAV <b id="statGravity">x1.00</b></span>
+          <span>DMG IN <b id="statDefense">x1.00</b></span>
+          <span>DASH <b id="statDash">x1.00</b></span>
+        </div>
       </div>
       <div id="ropeState" class="rope-state">TETHER // FREE</div>
     </div>
@@ -79,19 +95,21 @@ root.innerHTML = `
       <button id="touchFire" class="touch-action fire" type="button"><small>TAP</small>FIRE</button>
       <button id="touchDash" class="touch-action dash" type="button"><small>30%+</small>BOOST</button>
       <button id="touchFocus" class="touch-action focus" type="button"><small>HOLD</small>FOCUS</button>
+      <button id="touchSecondary" class="touch-action secondary" type="button"><small>TAP</small>AUX</button>
     </div>
     <button id="touchPause" class="touch-pause" type="button" aria-label="일시정지">Ⅱ</button>
   </div>
 
   <section id="menuScreen" class="screen">
     <div class="panel">
-      <div id="menuEyebrow" class="eyebrow">90 SECOND SWING / SHOOT PROTOCOL</div>
+      <div id="menuEyebrow" class="eyebrow">ENDLESS ROGUE FLIGHT PROTOCOL</div>
       <h1 id="menuTitle" class="logo">NEON<br>TETHER</h1>
-      <p id="menuTagline" class="tagline">도시에 매달리고, 흐름을 만들고, 접근하는 폭탄을 잠가 부숴라.</p>
+      <p id="menuTagline" class="tagline">도시를 질주해 에너지를 회수하고, 무장을 조립하며, 스테이지를 돌파하라.</p>
       <div class="controls">
         <div><kbd>마우스</kbd> 시점 / 조준</div>
         <div><kbd>좌클릭</kbd> 로프 / 당기기</div>
         <div><kbd>우클릭</kbd> 폭탄 잠금 사격</div>
+        <div><kbd>E</kbd> 보조 무기</div>
         <div><kbd>WASD</kbd> 공중 보정 / 느린 보행</div>
         <div><kbd>Q</kbd> 스태미나 전량 가스 추진</div>
         <div><kbd>SPACE</kbd> 포커스</div>
@@ -108,6 +126,34 @@ root.innerHTML = `
     </div>
   </section>
 
+  <section id="upgradeScreen" class="screen upgrade-screen hidden">
+    <div class="upgrade-panel">
+      <div class="upgrade-header">
+        <div>
+          <div class="eyebrow">SCORE GATE CLEARED</div>
+          <h2>GEAR ROULETTE</h2>
+        </div>
+        <div class="upgrade-stage"><span>NEXT</span><strong id="upgradeStageValue">STAGE 02</strong></div>
+      </div>
+      <p class="upgrade-instruction">세 개의 슬롯 중 하나를 선택해야 비행이 재개됩니다.</p>
+      <div id="upgradeReels" class="upgrade-reels rolling">
+        ${[0, 1, 2].map((index) => `
+          <button class="item-card" type="button" data-offer-index="${index}">
+            <div class="item-slot-lines"></div>
+            <div class="item-card-top"><span class="item-category">PASSIVE</span><b class="item-status">NEW</b></div>
+            <div id="itemPreview${index}" class="item-preview"></div>
+            <h3 class="item-name">SCANNING...</h3>
+            <div class="item-level">LV.1</div>
+            <p class="item-description">GEAR DATA ACQUISITION</p>
+            <strong class="item-stats">---</strong>
+            <span class="item-replace"></span>
+          </button>
+        `).join('')}
+      </div>
+      <div class="upgrade-footer">PASSIVE <i></i> ATTACK <i></i> EQUIPMENT</div>
+    </div>
+  </section>
+
   <section id="resultsScreen" class="screen hidden">
     <div class="panel">
       <div class="eyebrow">RUN COMPLETE</div>
@@ -119,7 +165,7 @@ root.innerHTML = `
         <div class="result"><span class="metric-label">BEST FLOW</span><strong id="resultCombo">x0</strong></div>
         <div class="result"><span class="metric-label">TOP SPEED</span><strong id="resultSpeed">0 km/h</strong></div>
         <div class="result"><span class="metric-label">FALLS</span><strong id="resultFalls">0</strong></div>
-        <div class="result"><span class="metric-label">TIME</span><strong>90 s</strong></div>
+        <div class="result"><span class="metric-label">TIME</span><strong id="resultTime">00:00</strong></div>
       </div>
       <button id="replayButton" type="button">다시 출격</button>
     </div>

@@ -5,7 +5,6 @@ import musicUrl from '../../sound/브금임시.mp3?url';
 import focusSoundUrl from '../../sound/시간정지.mp3?url';
 import windSoundUrl from '../../sound/활공 바람.mp3?url';
 import bombExplosionSoundUrl from '../../sound/폭탄터짐.mp3?url';
-import timerSoundUrl from '../../sound/타이머.mp3?url';
 
 const MUSIC_VOLUME = 0.27;
 
@@ -19,14 +18,12 @@ export class AudioSystem {
   private readonly dashBurst = new Audio(dashSoundUrl);
   private readonly focusBurst = new Audio(focusSoundUrl);
   private readonly bombExplosion = new Audio(bombExplosionSoundUrl);
-  private readonly timerEnd = new Audio(timerSoundUrl);
   private readonly fadeFrames = new Map<HTMLAudioElement, number>();
   private mediaEnabled = false;
   private paused = true;
   private focusing = false;
   private ropeRideRequested = false;
   private windRequested = false;
-  private timerCueActive = false;
   private musicPlayPending = false;
 
   constructor() {
@@ -44,12 +41,6 @@ export class AudioSystem {
     this.dashBurst.preload = 'auto';
     this.focusBurst.preload = 'auto';
     this.bombExplosion.preload = 'auto';
-    this.timerEnd.preload = 'auto';
-    this.timerEnd.volume = 0.9;
-    this.timerEnd.addEventListener('ended', () => {
-      this.timerCueActive = false;
-      this.timerEnd.currentTime = 0;
-    });
   }
 
   resume(): void {
@@ -65,7 +56,7 @@ export class AudioSystem {
     this.setPaused(false);
   }
 
-  setPaused(paused: boolean, keepTimerCue = false): void {
+  setPaused(paused: boolean): void {
     this.paused = paused;
     if (paused) {
       this.fadeElement(this.music, 0, 320, () => {
@@ -73,16 +64,10 @@ export class AudioSystem {
       });
       this.fadeAndStopLoop(this.ropeRide, 'rope');
       this.fadeAndStopLoop(this.wind, 'wind');
-      if (this.timerCueActive && !keepTimerCue) this.timerEnd.pause();
       return;
     }
     if (!this.mediaEnabled) return;
     this.startMusic();
-    if (this.timerCueActive && this.timerEnd.paused) {
-      void this.timerEnd.play().catch(() => {
-        // A later explicit input gesture resumes the paused countdown cue.
-      });
-    }
   }
 
   setMotionState(
@@ -188,28 +173,6 @@ export class AudioSystem {
 
   denied(): void {
     this.tone(115, 0.14, 'square', 0.035, 78);
-  }
-
-  startRunEndCue(elapsedSeconds = 0): void {
-    if (!this.mediaEnabled || this.paused || this.timerCueActive) return;
-    this.timerCueActive = true;
-    this.timerEnd.pause();
-    this.timerEnd.playbackRate = 1;
-    this.timerEnd.volume = 0.9;
-    try {
-      this.timerEnd.currentTime = Math.max(0, elapsedSeconds);
-    } catch {
-      this.timerEnd.currentTime = 0;
-    }
-    void this.timerEnd.play().catch(() => {
-      this.timerCueActive = false;
-    });
-  }
-
-  resetRunEndCue(): void {
-    this.timerCueActive = false;
-    this.timerEnd.pause();
-    this.timerEnd.currentTime = 0;
   }
 
   private startMusic(): void {
