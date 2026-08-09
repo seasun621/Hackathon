@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, type TargetKind } from './config';
+import type { AimQuality } from './CombatTypes';
 
 interface Target {
   id: number;
@@ -9,6 +10,8 @@ interface Target {
   basePosition: THREE.Vector3;
   phase: number;
   age: number;
+  health: number;
+  maxHealth: number;
 }
 
 interface BurstEffect {
@@ -31,11 +34,42 @@ export interface AimSolution {
 
 export interface BombTrack {
   targetId: number;
+  kind: 'bomb' | 'health';
   ndcX: number;
   ndcY: number;
   distance: number;
   locked: boolean;
   danger: boolean;
+  inEngageRange: boolean;
+  quality: AimQuality;
+  score: number;
+}
+
+export interface LoadedTargetChunk {
+  x: number;
+  z: number;
+}
+
+export interface PickupResult {
+  kind: 'normal' | 'gold';
+  score: number;
+  position: THREE.Vector3;
+}
+
+export interface BombDamageResult {
+  targetId: number;
+  position: THREE.Vector3;
+  destroyed: boolean;
+  healthRatio: number;
+  score: number;
+  damageDealt: number;
+}
+
+export interface HealthPackResult {
+  targetId: number;
+  position: THREE.Vector3;
+  healing: number;
+  quality: Exclude<AimQuality, 'none'>;
 }
 
 export interface ShotResult {
@@ -50,6 +84,7 @@ const COLORS: Record<TargetKind, number> = {
   normal: 0x4ef6ff,
   gold: 0xffd34e,
   bomb: 0xff286f,
+  health: 0x4dff8a,
 };
 
 export class TargetSystem {
@@ -64,12 +99,17 @@ export class TargetSystem {
   private readonly trackDirection = new THREE.Vector3();
   private readonly trackProjection = new THREE.Vector3();
   private readonly bombImpactPositions: THREE.Vector3[] = [];
+  private readonly pendingPickups: PickupResult[] = [];
   private readonly normalCoreGeometry = new THREE.IcosahedronGeometry(1.38, 1);
   private readonly goldCoreGeometry = new THREE.OctahedronGeometry(1.25, 0);
   private readonly bombCoreGeometry = new THREE.SphereGeometry(1.65, 12, 8);
+  private readonly healthCoreGeometry = new THREE.BoxGeometry(2.8, 2.2, 1.65);
+  private readonly healthCrossGeometry = new THREE.BoxGeometry(0.52, 1.45, 0.18);
   private readonly normalRingGeometry = new THREE.TorusGeometry(2.05, 0.14, 6, 18);
   private readonly goldRingGeometry = new THREE.TorusGeometry(2.05, 0.12, 6, 18);
   private readonly bombRingGeometry = new THREE.TorusGeometry(1.78, 0.18, 6, 16);
+  private readonly healthRingGeometry = new THREE.TorusGeometry(2.05, 0.12, 6, 20);
+  private readonly healthHandleGeometry = new THREE.TorusGeometry(0.72, 0.12, 6, 14, Math.PI);
   private readonly burstRingGeometry = new THREE.RingGeometry(0.78, 1, 24);
   private readonly burstFlashGeometry = new THREE.IcosahedronGeometry(1, 1);
   private readonly targetMaterials = new Map<TargetKind, THREE.MeshBasicMaterial>();
@@ -81,6 +121,8 @@ export class TargetSystem {
   private readonly sparkTexture: THREE.CanvasTexture;
   private nextId = 1;
   private spawnCooldown = 0;
+  private bombSpawnCooldown: number = CONFIG.bombInitialSpawnDelay;
+  private nextBombSide: number = Math.random() < 0.5 ? -1 : 1;
 
   constructor(private readonly scene: THREE.Scene) {
     for (const kind of Object.keys(COLORS) as TargetKind[]) {
@@ -96,18 +138,67 @@ export class TargetSystem {
     this.hitMeshes.length = 0;
     this.effects.length = 0;
     this.bombImpactPositions.length = 0;
+    this.pendingPickups.length = 0;
     this.spawnCooldown = 0;
+    this.bombSpawnCooldown = CONFIG.bombInitialSpawnDelay;
+    this.nextBombSide = Math.random() < 0.5 ? -1 : 1;
+  }
+
+  onChunksLoaded(chunks: LoadedTargetChunk[], playerPosition: THREE.Vector3): void {
+    let ambientCount = this.targets.reduce(
+      (count, target) => count + (target.kind === 'normal' || target.kind === 'gold' ? 1 : 0),
+      0,
+    );
+    let healthCount = this.targets.reduce(
+      (count, target) => count + (target.kind === 'health' ? 1 : 0),
+      0,
+    );
+    for (const chunk of chunks) {
+      const centerX = chunk.x * CONFIG.chunkSize;
+      const centerZ = chunk.z * CONFIG.chunkSize;
+      if (ambientCount < CONFIG.pickupTargetCount) {
+        const spawnCount = 2 + Math.floor(Math.random() * 3);
+        for (let index = 0; index < spawnCount; index += 1) {
+          if (ambientCount >= CONFIG.pickupTargetCount) break;
+          const position = new THREE.Vector3(
+            centerX + (Math.random() - 0.5) * CONFIG.chunkSize * 0.76,
+            16 + Math.random() * 65,
+            centerZ + (Math.random() - 0.5) * CONFIG.chunkSize * 0.76,
+          );
+          if (position.distanceToSquared(playerPosition) < 72 * 72) continue;
+          const kind: TargetKind = Math.random() < 0.24 ? 'gold' : 'normal';
+          this.addTarget(kind, position);
+          ambientCount += 1;
+        }
+      }
+      if (healthCount < CONFIG.healthPackCount && Math.random() < CONFIG.healthPackSpawnChance) {
+        const position = new THREE.Vector3(
+          centerX + (Math.random() - 0.5) * CONFIG.chunkSize * 0.68,
+          20 + Math.random() * 52,
+          centerZ + (Math.random() - 0.5) * CONFIG.chunkSize * 0.68,
+        );
+        if (position.distanceToSquared(playerPosition) >= 74 * 74) {
+          this.addTarget('health', position);
+          healthCount += 1;
+        }
+      }
+    }
   }
 
   update(dt: number, playerPosition: THREE.Vector3, forward: THREE.Vector3): void {
+    if (dt <= 0) return;
     this.spawnCooldown -= dt;
-    if (this.targets.length < CONFIG.targetCount && this.spawnCooldown <= 0) {
+    this.bombSpawnCooldown -= dt;
+    if (this.spawnCooldown <= 0) {
       const bombCount = this.targets.reduce(
         (count, target) => count + (target.kind === 'bomb' ? 1 : 0),
         0,
       );
-      this.spawnTarget(playerPosition, forward, bombCount < CONFIG.minimumBombs ? 'bomb' : undefined);
-      this.spawnCooldown = this.targets.length < 5 ? 0.08 : 0.18;
+      const missingBombs = Math.max(0, CONFIG.minimumBombs - bombCount);
+      if (missingBombs > 0 && this.bombSpawnCooldown <= 0) {
+        this.spawnTarget(playerPosition, forward, 'bomb');
+        this.spawnCooldown = 0.28;
+      }
     }
 
     for (let index = this.targets.length - 1; index >= 0; index -= 1) {
@@ -136,7 +227,25 @@ export class TargetSystem {
       target.group.position.z += Math.cos(target.age * 0.61 + target.phase * 0.8) * (drift * 0.58);
       target.group.rotation.x = Math.sin(target.age * 0.83 + target.phase) * 0.18;
 
-      if (target.group.position.distanceToSquared(playerPosition) > 190 * 190) {
+      if (target.kind === 'normal' || target.kind === 'gold') {
+        const collectionRadius = target.kind === 'gold'
+          ? CONFIG.pickupCollectionRadiusGold
+          : CONFIG.pickupCollectionRadiusNormal;
+        if (target.group.position.distanceToSquared(playerPosition) <= collectionRadius * collectionRadius) {
+          const kind = target.kind;
+          this.pendingPickups.push({
+            kind,
+            score: kind === 'gold' ? CONFIG.pickupGoldScore : CONFIG.pickupNormalScore,
+            position: target.group.position.clone(),
+          });
+          this.burst(target.group.position, kind);
+          this.removeTarget(index);
+          continue;
+        }
+      }
+
+      const removalRange = target.kind === 'bomb' ? 210 : 280;
+      if (target.group.position.distanceToSquared(playerPosition) > removalRange * removalRange) {
         this.removeTarget(index);
       }
     }
@@ -198,22 +307,22 @@ export class TargetSystem {
     };
   }
 
-  getBombTracks(camera: THREE.Camera, buildingMeshes: THREE.Mesh[]): BombTrack[] {
-    const tracks: Array<BombTrack & { score: number; eligible: boolean }> = [];
-    let bestId: number | null = null;
-    let bestScore = Number.POSITIVE_INFINITY;
+  getBombTracks(camera: THREE.Camera, buildingMeshes: THREE.Mesh[], weaponRange: number): BombTrack[] {
+    const tracks: BombTrack[] = [];
 
     for (const target of this.targets) {
-      if (target.kind !== 'bomb') continue;
+      if (target.kind !== 'bomb' && target.kind !== 'health') continue;
       const distance = camera.position.distanceTo(target.group.position);
-      if (distance > CONFIG.bombTrackRange) continue;
+      const trackRange = target.kind === 'health' ? CONFIG.healthPackTrackRange : CONFIG.bombTrackRange;
+      if (distance > trackRange) continue;
       this.trackProjection.copy(target.group.position).project(camera);
       if (this.trackProjection.z < -1 || this.trackProjection.z > 1) continue;
       if (Math.abs(this.trackProjection.x) > 1.08 || Math.abs(this.trackProjection.y) > 1.08) continue;
 
       const angularOffset = Math.hypot(this.trackProjection.x, this.trackProjection.y);
       let clearLine = false;
-      if (distance <= CONFIG.hitscanRange && angularOffset <= CONFIG.bombLockNdcRadius) {
+      const inEngageRange = distance <= weaponRange;
+      if (inEngageRange && angularOffset <= CONFIG.bombLockNdcRadius) {
         this.trackDirection.copy(target.group.position).sub(camera.position).normalize();
         this.raycaster.set(camera.position, this.trackDirection);
         this.raycaster.far = distance;
@@ -222,43 +331,131 @@ export class TargetSystem {
         clearLine = !this.wallIntersections[0] || this.wallIntersections[0].distance >= distance - 1.8;
       }
 
-      const eligible = clearLine && angularOffset <= CONFIG.bombLockNdcRadius;
+      const quality: AimQuality = !inEngageRange || !clearLine
+        ? 'none'
+        : angularOffset <= CONFIG.aimPerfectNdcRadius
+          ? 'perfect'
+          : angularOffset <= CONFIG.aimGrazeNdcRadius
+            ? 'graze'
+            : 'none';
       const score = angularOffset * 3 + distance * 0.002;
-      if (eligible && score < bestScore) {
-        bestScore = score;
-        bestId = target.id;
-      }
       tracks.push({
         targetId: target.id,
+        kind: target.kind,
         ndcX: this.trackProjection.x,
         ndcY: this.trackProjection.y,
         distance,
         locked: false,
-        danger: distance < 24,
+        danger: target.kind === 'bomb' && distance < 24,
+        inEngageRange,
+        quality,
         score,
-        eligible,
       });
     }
-
-    for (const track of tracks) track.locked = track.targetId === bestId;
     return tracks;
   }
 
-  shootBombById(targetId: number, cameraPosition: THREE.Vector3): ShotResult | null {
+  consumePickup(): PickupResult | null {
+    return this.pendingPickups.shift() ?? null;
+  }
+
+  detonateBombById(targetId: number, quality: Exclude<AimQuality, 'none'> = 'perfect'): BombDamageResult | null {
     const index = this.targets.findIndex((target) => target.id === targetId && target.kind === 'bomb');
     if (index < 0) return null;
     const target = this.targets[index];
     const position = target.group.position.clone();
-    const result: ShotResult = {
-      kind: 'bomb',
-      baseScore: 420,
-      distance: cameraPosition.distanceTo(position),
-      centerBonus: 1.35,
+    const result: BombDamageResult = {
+      targetId,
       position,
+      destroyed: true,
+      healthRatio: 0,
+      score: quality === 'perfect' ? 600 : 300,
+      damageDealt: 0,
     };
     this.burst(position, 'bomb');
     this.removeTarget(index);
     return result;
+  }
+
+  activateHealthPackById(
+    targetId: number,
+    quality: Exclude<AimQuality, 'none'> = 'perfect',
+  ): HealthPackResult | null {
+    const index = this.targets.findIndex((target) => target.id === targetId && target.kind === 'health');
+    if (index < 0) return null;
+    const target = this.targets[index];
+    const result: HealthPackResult = {
+      targetId,
+      position: target.group.position.clone(),
+      healing: quality === 'perfect' ? CONFIG.healthPackHealPerfect : CONFIG.healthPackHealGraze,
+      quality,
+    };
+    this.burst(result.position, 'health');
+    this.removeTarget(index);
+    return result;
+  }
+
+  detonateBombAtPoint(position: THREE.Vector3, radius: number): BombDamageResult | null {
+    let bestIndex = -1;
+    let bestDistance = radius * radius;
+    for (let index = 0; index < this.targets.length; index += 1) {
+      const target = this.targets[index];
+      if (target.kind !== 'bomb') continue;
+      const distance = target.group.position.distanceToSquared(position);
+      if (distance > bestDistance) continue;
+      bestDistance = distance;
+      bestIndex = index;
+    }
+    if (bestIndex < 0) return null;
+    return this.detonateBombById(this.targets[bestIndex].id);
+  }
+
+  detonateBombsInRadius(position: THREE.Vector3, radius: number): BombDamageResult[] {
+    const results: BombDamageResult[] = [];
+    for (let index = this.targets.length - 1; index >= 0; index -= 1) {
+      const target = this.targets[index];
+      if (target.kind !== 'bomb') continue;
+      const distance = target.group.position.distanceTo(position);
+      if (distance > radius) continue;
+      const result = this.detonateBombById(target.id);
+      if (result) results.push(result);
+    }
+    return results;
+  }
+
+  findNearestBomb(position: THREE.Vector3, range: number): { id: number; position: THREE.Vector3 } | null {
+    let best: Target | null = null;
+    let bestDistance = range * range;
+    for (const target of this.targets) {
+      if (target.kind !== 'bomb') continue;
+      const distance = target.group.position.distanceToSquared(position);
+      if (distance > bestDistance) continue;
+      bestDistance = distance;
+      best = target;
+    }
+    return best ? { id: best.id, position: best.group.position.clone() } : null;
+  }
+
+  getBombPosition(targetId: number): THREE.Vector3 | null {
+    return this.targets.find((target) => target.id === targetId && target.kind === 'bomb')
+      ?.group.position.clone() ?? null;
+  }
+
+  getHealthPackPosition(targetId: number): THREE.Vector3 | null {
+    return this.targets.find((target) => target.id === targetId && target.kind === 'health')
+      ?.group.position.clone() ?? null;
+  }
+
+  shootBombById(targetId: number, cameraPosition: THREE.Vector3): ShotResult | null {
+    const result = this.detonateBombById(targetId);
+    if (!result) return null;
+    return {
+      kind: 'bomb',
+      baseScore: result.score,
+      distance: cameraPosition.distanceTo(result.position),
+      centerBonus: 1,
+      position: result.position,
+    };
   }
 
   consumeBombImpact(): THREE.Vector3 | null {
@@ -289,15 +486,30 @@ export class TargetSystem {
     forwardInput: THREE.Vector3,
     forcedKind?: TargetKind,
   ): void {
+    const roll = Math.random();
+    const kind: TargetKind = forcedKind ?? (roll < 0.22 ? 'gold' : 'normal');
     const forward = forwardInput.clone();
-    forward.y = 0;
     if (forward.lengthSq() < 0.01) forward.set(0, 0, -1);
     forward.normalize();
-    const right = new THREE.Vector3(-forward.z, 0, forward.x);
-    const distance = 36 + Math.random() * 76;
-    const lateral = (Math.random() - 0.5) * 66;
+    const horizontalForward = forward.clone();
+    horizontalForward.y = 0;
+    if (horizontalForward.lengthSq() < 0.01) horizontalForward.set(0, 0, -1);
+    horizontalForward.normalize();
+    const right = new THREE.Vector3(-horizontalForward.z, 0, horizontalForward.x);
+    const bombDistance = THREE.MathUtils.lerp(
+      CONFIG.bombSpawnDistanceMin,
+      CONFIG.bombSpawnDistanceMax,
+      Math.random(),
+    );
+    const distance = kind === 'bomb' ? bombDistance : 36 + Math.random() * 76;
+    const bombLateral = THREE.MathUtils.lerp(
+      CONFIG.bombSpawnLateralMin,
+      CONFIG.bombSpawnLateralMax,
+      Math.random(),
+    ) * this.nextBombSide;
+    const lateral = kind === 'bomb' ? bombLateral : (Math.random() - 0.5) * 66;
     const position = playerPosition.clone()
-      .addScaledVector(forward, distance)
+      .addScaledVector(kind === 'bomb' ? forward : horizontalForward, distance)
       .addScaledVector(right, lateral);
 
     if (Math.random() > 0.5) {
@@ -307,10 +519,16 @@ export class TargetSystem {
       position.z = Math.round(position.z / CONFIG.chunkSize) * CONFIG.chunkSize
         + (Math.random() - 0.5) * 15;
     }
-    position.y = 15 + Math.random() * 49;
+    if (kind === 'bomb') {
+      position.y = THREE.MathUtils.clamp(position.y + (Math.random() - 0.35) * 18, 18, 150);
+      this.nextBombSide *= -1;
+    } else {
+      position.y = 15 + Math.random() * 49;
+    }
+    this.addTarget(kind, position);
+  }
 
-    const roll = Math.random();
-    const kind: TargetKind = forcedKind ?? (roll < 0.18 ? 'bomb' : roll < 0.36 ? 'gold' : 'normal');
+  private addTarget(kind: TargetKind, position: THREE.Vector3): void {
     const group = this.makeTarget(kind);
     group.position.copy(position);
     this.scene.add(group);
@@ -328,8 +546,10 @@ export class TargetSystem {
       basePosition: position.clone(),
       phase: Math.random() * Math.PI * 2,
       age: 0,
+      health: 1,
+      maxHealth: 1,
     });
-    this.hitMeshes.push(hitMesh);
+    if (kind === 'bomb' || kind === 'health') this.hitMeshes.push(hitMesh);
   }
 
   private makeTarget(kind: TargetKind): THREE.Group {
@@ -353,7 +573,7 @@ export class TargetSystem {
       const ring = new THREE.Mesh(this.goldRingGeometry, material);
       ring.rotation.x = Math.PI / 2;
       group.add(ring);
-    } else {
+    } else if (kind === 'bomb') {
       const core = new THREE.Mesh(this.bombCoreGeometry, this.darkMaterial);
       core.userData.hitSurface = true;
       group.add(core);
@@ -364,13 +584,31 @@ export class TargetSystem {
       warningRing2.rotation.y = Math.PI / 2;
       group.add(warningRing2);
       group.scale.setScalar(CONFIG.bombScale);
+    } else {
+      const caseMesh = new THREE.Mesh(this.healthCoreGeometry, this.darkMaterial);
+      caseMesh.userData.hitSurface = true;
+      group.add(caseMesh);
+      const crossVertical = new THREE.Mesh(this.healthCrossGeometry, material);
+      crossVertical.position.z = 0.92;
+      group.add(crossVertical);
+      const crossHorizontal = crossVertical.clone();
+      crossHorizontal.rotation.z = Math.PI / 2;
+      group.add(crossHorizontal);
+      const ring = new THREE.Mesh(this.healthRingGeometry, material);
+      ring.rotation.x = Math.PI / 2;
+      group.add(ring);
+      const handle = new THREE.Mesh(this.healthHandleGeometry, material);
+      handle.position.y = 1.26;
+      handle.rotation.z = Math.PI;
+      group.add(handle);
+      group.scale.setScalar(1.18);
     }
 
     return group;
   }
 
   private burst(position: THREE.Vector3, kind: TargetKind): void {
-    const count = kind === 'normal' ? 28 : kind === 'gold' ? 44 : 84;
+    const count = kind === 'normal' ? 28 : kind === 'gold' ? 44 : kind === 'health' ? 38 : 84;
     const positions = new Float32Array(count * 3);
     const velocities = new Float32Array(count * 3);
     for (let index = 0; index < count; index += 1) {
@@ -431,13 +669,20 @@ export class TargetSystem {
       ring,
       flash,
       age: 0,
-      duration: kind === 'normal' ? 0.58 : kind === 'gold' ? 0.76 : 0.95,
+      duration: kind === 'normal' ? 0.58 : kind === 'gold' ? 0.76 : kind === 'health' ? 0.7 : 0.95,
       power: kind === 'bomb' ? 1.45 : kind === 'gold' ? 1.18 : 1,
     });
   }
 
   private removeTarget(index: number): void {
     const target = this.targets[index];
+    if (target.kind === 'bomb') {
+      this.bombSpawnCooldown = THREE.MathUtils.lerp(
+        CONFIG.bombRespawnDelayMin,
+        CONFIG.bombRespawnDelayMax,
+        Math.random(),
+      );
+    }
     this.scene.remove(target.group);
     this.targets.splice(index, 1);
     const meshIndex = this.hitMeshes.indexOf(target.hitMesh);
