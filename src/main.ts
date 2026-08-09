@@ -29,7 +29,12 @@ root.innerHTML = `
       <span class="metric-label">HIT FLOW</span>
       <strong id="comboValue">x0</strong>
     </div>
-    <div id="toast" class="toast"></div>
+    <div id="toast" class="toast">
+      <span class="toast-badge">BREAK!</span>
+      <strong class="toast-points">+000</strong>
+      <span class="toast-detail">TARGET BREAK</span>
+    </div>
+    <div id="hitFlash" class="hit-flash"></div>
 
     <div class="bottom-hud">
       <div class="meter-stack">

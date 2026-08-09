@@ -18,6 +18,7 @@ interface BurstEffect {
   flash: THREE.Mesh<THREE.IcosahedronGeometry, THREE.MeshBasicMaterial>;
   age: number;
   duration: number;
+  power: number;
 }
 
 export interface AimSolution {
@@ -157,11 +158,11 @@ export class TargetSystem {
       }
       positions.needsUpdate = true;
       effect.points.material.opacity = 1 - progress;
-      effect.points.material.size = 1.15 + progress * 0.55;
+      effect.points.material.size = (1.15 + progress * 0.55) * effect.power;
       effect.ring.lookAt(playerPosition);
-      effect.ring.scale.setScalar(1 + progress * 8.5);
+      effect.ring.scale.setScalar(1 + progress * 8.5 * effect.power);
       effect.ring.material.opacity = (1 - progress) * 0.95;
-      effect.flash.scale.setScalar(1 + progress * 5.5);
+      effect.flash.scale.setScalar(1 + progress * 5.5 * effect.power);
       effect.flash.material.opacity = (1 - progress) * 0.8;
 
       if (progress >= 1) {
@@ -369,7 +370,7 @@ export class TargetSystem {
   }
 
   private burst(position: THREE.Vector3, kind: TargetKind): void {
-    const count = kind === 'normal' ? 28 : kind === 'gold' ? 44 : 52;
+    const count = kind === 'normal' ? 28 : kind === 'gold' ? 44 : 84;
     const positions = new Float32Array(count * 3);
     const velocities = new Float32Array(count * 3);
     for (let index = 0; index < count; index += 1) {
@@ -379,7 +380,9 @@ export class TargetSystem {
         Math.random() - 0.32,
         Math.random() - 0.5,
       ).normalize();
-      const speed = 9 + Math.random() * 19;
+      const speed = kind === 'bomb'
+        ? 13 + Math.random() * 31
+        : 9 + Math.random() * 19;
       velocities[offset] = direction.x * speed;
       velocities[offset + 1] = direction.y * speed;
       velocities[offset + 2] = direction.z * speed;
@@ -422,7 +425,15 @@ export class TargetSystem {
     const flash = new THREE.Mesh(this.burstFlashGeometry, flashMaterial);
     flash.position.copy(position);
     this.scene.add(points, ring, flash);
-    this.effects.push({ points, velocities, ring, flash, age: 0, duration: kind === 'normal' ? 0.58 : 0.76 });
+    this.effects.push({
+      points,
+      velocities,
+      ring,
+      flash,
+      age: 0,
+      duration: kind === 'normal' ? 0.58 : kind === 'gold' ? 0.76 : 0.95,
+      power: kind === 'bomb' ? 1.45 : kind === 'gold' ? 1.18 : 1,
+    });
   }
 
   private removeTarget(index: number): void {

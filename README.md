@@ -11,12 +11,12 @@
 ## 조작
 
 - 마우스 이동: 시점 및 조준
-- 왼쪽 버튼 누르기: 보정된 앵커로 로프 발사·교체, 유지하는 동안 로프 당기기
-- 왼쪽 버튼 놓기: 로프 해제
+- 왼쪽 버튼 누르기: 노란 원으로 예고된 보정 앵커로 로프 발사·교체, 유지하는 동안 로프 권취 가속
+- 왼쪽 버튼 놓기: 누적된 스윙 속도와 릴리스 보조를 유지하며 로프 해제
 - 오른쪽 버튼: 폭탄의 추적 박스가 `FIRE NOW` 상태일 때 자동 보정 사격
 - W/A/S/D: 공중 방향 보정, 지상 저속 이동
 - Q: 현재 스태미나를 모두 사용해 시선 방향으로 직선 부스트
-- Space: 시간 감속
+- Space: 화면·BGM·공중음을 함께 왜곡하는 시간 감속
 - R: 현재 판 재시작
 - Esc: 일시 정지
 
@@ -45,4 +45,8 @@ npm run build
 - Rapier 3D
 - GitHub Actions 및 GitHub Pages
 
-개발 범위와 진행 내역은 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md), [PROGRESS.md](./PROGRESS.md)를 참고하세요.
+게임 BGM과 로프 발사·권취·대시·활공 바람·시간정지 효과음은 `sound/` 폴더의 MP3 자산을 사용합니다. 반복음은 상태 사이에서 페이드 전환되고, 일시정지 메뉴에서는 BGM도 멈춥니다. 총격·명중·폭발은 Web Audio 합성음을 함께 사용합니다.
+
+HUD와 메뉴는 `fonts/kbl/OTF/`의 KBL 로컬 폰트를 사용하며, 외부 웹 폰트 연결 없이 빌드에 포함됩니다. 폭탄 파괴와 플레이어 충돌에는 `폭탄터짐.mp3`와 강화된 파티클·점수 충격 연출이 함께 재생됩니다.
+
+개발 범위와 진행 내역은 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md), [PROGRESS.md](./PROGRESS.md)를 참고하세요. 도시의 도로 위계·스카이라인·지구·건물 배치 규칙은 [CITY_GENERATION_RULES.md](./CITY_GENERATION_RULES.md)에 정리되어 있습니다.

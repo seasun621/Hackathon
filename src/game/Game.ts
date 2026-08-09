@@ -20,6 +20,7 @@ interface HudElements {
   anchorReadout: HTMLElement;
   bombMarkers: HTMLElement;
   toast: HTMLElement;
+  hitFlash: HTMLElement;
   speedLines: HTMLElement;
   focusFx: HTMLElement;
   vignette: HTMLElement;
@@ -83,10 +84,13 @@ export class Game {
   private readonly physicsRight = new THREE.Vector3();
   private readonly physicsMove = new THREE.Vector3();
   private readonly grappleDelta = new THREE.Vector3();
+  private readonly grappleTangent = new THREE.Vector3();
   private readonly dashDirection = new THREE.Vector3(0, 0, -1);
   private hasCandidateAnchor = false;
   private grappleAnchor: THREE.Vector3 | null = null;
   private ropeLength = 0;
+  private grappleInitialLength = 0;
+  private ropeReelCharge = 0;
   private ropeShotProgress = 1;
   private leftHeld = false;
   private isGrounded = false;
@@ -185,7 +189,13 @@ export class Game {
 
     this.anchorMarker = new THREE.Mesh(
       new THREE.TorusGeometry(0.92, 0.075, 8, 28),
-      new THREE.MeshBasicMaterial({ color: 0x4ef6ff, transparent: true, opacity: 0.9, depthTest: false }),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd84a,
+        transparent: true,
+        opacity: 0.98,
+        depthTest: false,
+        blending: THREE.AdditiveBlending,
+      }),
     );
     this.anchorMarker.renderOrder = 20;
     this.anchorMarker.visible = false;
@@ -217,7 +227,7 @@ export class Game {
     this.loadBestScore();
     this.bindEvents();
     this.resetPlayer();
-    this.city.update(this.playerPosition);
+    this.city.update(this.playerPosition, this.cameraForward);
     this.updateCamera(0);
     this.updateAnchorSelection(0);
     this.updateHud();
@@ -231,7 +241,7 @@ export class Game {
     if (this.mode === 'playing') this.updatePlaying(realDt);
     else this.updateIdle(realDt);
 
-    this.city.update(this.playerPosition);
+    this.city.update(this.playerPosition, this.cameraForward);
     this.updateEffects(realDt);
     this.updateCamera(realDt);
     this.updateAnchorSelection(realDt);
@@ -364,8 +374,26 @@ export class Game {
         this.grappleAnchor.z - translation.z,
       );
       const distance = this.grappleDelta.length();
+      const reelRatio = this.grappleInitialLength > CONFIG.ropeMinLength
+        ? clamp(
+          1 - (this.ropeLength - CONFIG.ropeMinLength)
+            / (this.grappleInitialLength - CONFIG.ropeMinLength),
+          0,
+          1,
+        )
+        : 1;
       if (this.leftHeld) {
-        this.ropeLength = Math.max(CONFIG.ropeMinLength, this.ropeLength - CONFIG.ropePullSpeed * dt);
+        const reelSpeed = THREE.MathUtils.lerp(
+          CONFIG.ropePullSpeed,
+          CONFIG.ropePullMaxSpeed,
+          Math.pow(reelRatio, 0.68),
+        );
+        this.ropeLength = Math.max(CONFIG.ropeMinLength, this.ropeLength - reelSpeed * dt);
+        this.ropeReelCharge = clamp(
+          this.ropeReelCharge + (0.2 + reelRatio * 0.95) * dt,
+          0,
+          1,
+        );
       }
       if (distance > 0.001) {
         this.grappleDelta.multiplyScalar(1 / distance);
@@ -375,7 +403,9 @@ export class Game {
           + velocity.z * this.grappleDelta.z;
         const excess = Math.max(0, distance - this.ropeLength);
         const damping = Math.max(0, -towardSpeed) * CONFIG.ropeDamping;
-        const pull = this.leftHeld ? 10 : 0;
+        const pull = this.leftHeld
+          ? THREE.MathUtils.lerp(8, CONFIG.ropeReelRadialForce, reelRatio)
+          : 0;
         const impulse = (excess * CONFIG.ropeSpring + damping + pull) * dt;
         this.playerBody.applyImpulse(
           {
@@ -385,6 +415,35 @@ export class Game {
           },
           true,
         );
+
+        if (this.leftHeld) {
+          this.grappleTangent.set(velocity.x, velocity.y, velocity.z)
+            .addScaledVector(this.grappleDelta, -towardSpeed);
+          if (this.grappleTangent.lengthSq() < 4) {
+            this.grappleTangent.copy(this.cameraForward)
+              .addScaledVector(
+                this.grappleDelta,
+                -this.cameraForward.dot(this.grappleDelta),
+              );
+          }
+          if (this.grappleTangent.lengthSq() > 0.001) {
+            this.grappleTangent.normalize();
+            const tensionMix = clamp(excess / 4, 0, 1);
+            const reelAcceleration = THREE.MathUtils.lerp(
+              CONFIG.ropeReelAcceleration,
+              CONFIG.ropeReelMaxAcceleration,
+              Math.pow(reelRatio, 0.72),
+            ) * (0.58 + tensionMix * 0.42);
+            this.playerBody.applyImpulse(
+              {
+                x: this.grappleTangent.x * reelAcceleration * dt,
+                y: this.grappleTangent.y * reelAcceleration * dt,
+                z: this.grappleTangent.z * reelAcceleration * dt,
+              },
+              true,
+            );
+          }
+        }
       }
     }
 
@@ -489,6 +548,14 @@ export class Game {
 
     const velocity = this.playerBody.linvel();
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
+    this.audio.setMotionState(
+      this.grappleAnchor !== null,
+      this.mode === 'playing' && !this.isGrounded,
+      speed,
+      this.leftHeld,
+      this.focusing,
+      dt,
+    );
     const targetFov = 74
       + clamp((speed - 16) / 38, 0, 1) * 10
       + this.dashFx * 14
@@ -524,6 +591,7 @@ export class Game {
     if (this.grappleAnchor) {
       this.hasCandidateAnchor = false;
       this.anchorMarker.visible = true;
+      (this.anchorMarker.material as THREE.MeshBasicMaterial).color.setHex(0x58f7ff);
       this.anchorMarker.position.copy(this.grappleAnchor);
       this.anchorMarker.quaternion.copy(this.camera.quaternion);
       const scale = clamp(this.camera.position.distanceTo(this.grappleAnchor) * 0.012, 0.75, 1.7);
@@ -540,9 +608,11 @@ export class Game {
     if (anchor) {
       this.candidateAnchor.copy(anchor);
       this.anchorMarker.visible = true;
+      (this.anchorMarker.material as THREE.MeshBasicMaterial).color.setHex(0xffd84a);
       this.anchorMarker.position.copy(anchor);
       this.anchorMarker.quaternion.copy(this.camera.quaternion);
-      const scale = clamp(this.camera.position.distanceTo(anchor) * 0.012, 0.75, 1.7);
+      const pulse = 1 + Math.sin(performance.now() * 0.009) * 0.1;
+      const scale = clamp(this.camera.position.distanceTo(anchor) * 0.012, 0.75, 1.7) * pulse;
       this.anchorMarker.scale.setScalar(scale);
     } else {
       this.anchorMarker.visible = false;
@@ -627,6 +697,7 @@ export class Game {
   private setFocusEffect(active: boolean): void {
     if (this.focusing === active) return;
     this.focusing = active;
+    this.audio.setFocus(active);
     this.hud.focusFx.classList.toggle('active', active);
     this.hud.speedLines.classList.toggle('focus-mode', active);
     this.renderer.domElement.classList.toggle('focus-active', active);
@@ -664,6 +735,8 @@ export class Game {
     this.ropeShotProgress = 0;
     const distance = this.grappleAnchor.distanceTo(this.playerPosition);
     this.ropeLength = Math.max(CONFIG.ropeMinLength, distance * 0.88);
+    this.grappleInitialLength = this.ropeLength;
+    this.ropeReelCharge = 0;
     const direction = this.grappleAnchor.clone().sub(this.playerPosition).normalize().multiplyScalar(2.1);
     this.playerBody.applyImpulse({ x: direction.x, y: direction.y, z: direction.z }, true);
     this.leftKick = 1;
@@ -671,9 +744,34 @@ export class Game {
   }
 
   private detach(): void {
-    if (this.grappleAnchor) this.audio.detach();
+    if (this.grappleAnchor) {
+      if (this.leftHeld && this.mode === 'playing' && this.ropeReelCharge > 0.04) {
+        const velocity = this.playerBody.linvel();
+        this.grappleTangent.set(velocity.x, Math.max(0, velocity.y * 0.18), velocity.z);
+        if (this.grappleTangent.lengthSq() < 4) {
+          this.grappleTangent.copy(this.cameraForward);
+          this.grappleTangent.y = Math.max(0.08, this.grappleTangent.y);
+        }
+        this.grappleTangent.normalize();
+        const releaseBoost = CONFIG.ropeReleaseBoost * this.ropeReelCharge;
+        this.playerBody.applyImpulse(
+          {
+            x: this.grappleTangent.x * releaseBoost,
+            y: this.grappleTangent.y * releaseBoost
+              + CONFIG.ropeReleaseLift * this.ropeReelCharge,
+            z: this.grappleTangent.z * releaseBoost,
+          },
+          true,
+        );
+        this.dashFx = Math.max(this.dashFx, this.ropeReelCharge * 0.42);
+        this.shake = Math.max(this.shake, this.ropeReelCharge * 0.34);
+      }
+      this.audio.detach();
+    }
     this.grappleAnchor = null;
     this.ropeShotProgress = 1;
+    this.grappleInitialLength = 0;
+    this.ropeReelCharge = 0;
     this.ropeMesh.visible = false;
     this.ropeTip.visible = false;
     this.leftHeld = false;
@@ -791,14 +889,15 @@ export class Game {
     this.physicsAccumulator = 0;
     this.targets.reset();
     this.resetPlayer();
+    this.audio.resume();
     this.tryDash(true);
     this.hud.results.classList.add('hidden');
     this.hud.menu.classList.add('hidden');
-    this.audio.resume();
   }
 
   private finishRun(): void {
     this.mode = 'over';
+    this.audio.setPaused(true);
     this.dashTimeRemaining = 0;
     this.detach();
     const accuracy = this.stats.shots > 0 ? Math.round((this.stats.hits / this.stats.shots) * 100) : 0;
@@ -878,6 +977,7 @@ export class Game {
       const locked = document.pointerLockElement === this.renderer.domElement;
       if (locked) {
         if (this.mode === 'paused') this.mode = 'playing';
+        this.audio.setPaused(false);
         this.hud.menu.classList.add('hidden');
         return;
       }
@@ -885,6 +985,7 @@ export class Game {
       this.leftHeld = false;
       if (this.mode === 'playing') {
         this.mode = 'paused';
+        this.audio.setPaused(true);
         this.detach();
         this.showPauseMenu();
       }
@@ -905,6 +1006,7 @@ export class Game {
     this.renderer.domElement.requestPointerLock().catch(() => {
       if (this.mode !== 'playing') return;
       this.mode = 'paused';
+      this.audio.setPaused(true);
       this.detach();
       this.showPauseMenu();
     });
@@ -955,11 +1057,44 @@ export class Game {
   }
 
   private showToast(message: string, kind: 'positive' | 'negative'): void {
-    this.hud.toast.textContent = message;
-    this.hud.toast.classList.remove('show', 'positive', 'negative');
+    const [primary, ...detailParts] = message.split('\n');
+    const detail = detailParts.join(' ');
+    const bomb = message.includes('BOMB');
+    const badge = kind === 'negative'
+      ? 'WARNING!'
+      : message.includes('GOLD')
+        ? 'JACKPOT!'
+        : message.includes('CENTER')
+          ? 'CRITICAL!'
+          : message.includes('GAS')
+            ? 'BOOST!'
+            : bomb
+              ? 'PERFECT!'
+              : 'BREAK!';
+    const badgeElement = this.hud.toast.querySelector<HTMLElement>('.toast-badge');
+    const pointsElement = this.hud.toast.querySelector<HTMLElement>('.toast-points');
+    const detailElement = this.hud.toast.querySelector<HTMLElement>('.toast-detail');
+    if (badgeElement) badgeElement.textContent = badge;
+    if (pointsElement) pointsElement.textContent = primary;
+    if (detailElement) detailElement.textContent = detail;
+    this.hud.toast.classList.remove('show', 'positive', 'negative', 'bomb');
+    this.hud.hitFlash.classList.remove('show', 'positive', 'negative', 'bomb');
     void this.hud.toast.offsetWidth;
+    void this.hud.hitFlash.offsetWidth;
     this.hud.toast.classList.add('show', kind);
-    this.toastTimer = 0.7;
+    this.hud.hitFlash.classList.add('show', kind);
+    if (bomb) {
+      this.hud.toast.classList.add('bomb');
+      this.hud.hitFlash.classList.add('bomb');
+    }
+    this.hud.score.classList.remove('score-punch');
+    void this.hud.score.offsetWidth;
+    this.hud.score.classList.add('score-punch');
+    window.setTimeout(() => {
+      this.hud.hitFlash.classList.remove('show', 'positive', 'negative', 'bomb');
+      this.hud.score.classList.remove('score-punch');
+    }, 520);
+    this.toastTimer = 0.9;
   }
 
   private punchCombo(): void {
@@ -984,7 +1119,9 @@ export class Game {
     const dashReady = this.stamina >= CONFIG.dashMinimumStamina;
     this.hud.staminaMeter.classList.toggle('low', !dashReady);
     this.hud.staminaMeter.classList.toggle('ready', dashReady);
-    this.hud.ropeState.textContent = this.grappleAnchor ? 'TETHER // PULLING' : 'TETHER // FREE';
+    this.hud.ropeState.textContent = this.grappleAnchor
+      ? `TETHER // REEL ${Math.round(this.ropeReelCharge * 100)}%`
+      : 'TETHER // FREE';
     this.hud.ropeState.classList.toggle('active', this.grappleAnchor !== null);
     this.hud.anchorReadout.textContent = this.grappleAnchor ? 'ANCHOR LOCKED' : 'ASSIST ANCHOR';
     this.hud.anchorReadout.classList.toggle('visible', this.grappleAnchor !== null || this.hasCandidateAnchor);
@@ -1115,6 +1252,7 @@ export class Game {
       anchorReadout: requiredElement('anchorReadout'),
       bombMarkers: requiredElement('bombMarkers'),
       toast: requiredElement('toast'),
+      hitFlash: requiredElement('hitFlash'),
       speedLines: requiredElement('speedLines'),
       focusFx: requiredElement('focusFx'),
       vignette: requiredElement('vignette'),
