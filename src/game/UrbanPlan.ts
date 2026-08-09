@@ -1,4 +1,13 @@
 import { CONFIG } from './config';
+import {
+  hasDiagonalBoulevard,
+  gameplayZoneFor,
+  hashCoordinates,
+  isCivicIntersection,
+  nearestLandmark,
+  plannedRoadClass,
+} from './MacroCityPlan';
+import type { GameplayZone } from './MacroCityPlan';
 
 export type RoadClass = 'street' | 'avenue' | 'grand-avenue';
 export type DistrictKind =
@@ -19,6 +28,19 @@ export type BuildingArchetype =
   | 'cylinder'
   | 'courtyard'
   | 'brick-midrise';
+
+export type DevelopmentEra = 'historic' | 'postwar' | 'modern' | 'contemporary';
+
+export interface LocalParcelPlan {
+  lotIndex: number;
+  quadrantIndex: number;
+  localX: number;
+  localZ: number;
+  spanX: number;
+  spanZ: number;
+  streetAxis: 'x' | 'z';
+  corner: boolean;
+}
 
 export interface RiverPlan {
   centerX: number;
@@ -41,19 +63,22 @@ export interface ChunkUrbanPlan {
   roundabout: boolean;
   diagonalBoulevard: boolean;
   river: RiverPlan | null;
+  developmentEra: DevelopmentEra;
+  blockHeightBias: number;
+  parcelRhythm: number;
+  gameplayZone: GameplayZone;
+  dangerTier: number;
+  arenaVariant: number;
 }
 
 export const ROAD_WIDTHS: Record<RoadClass, number> = {
   street: 12,
   avenue: 30,
-  'grand-avenue': 50,
+  'grand-avenue': 42,
 };
 
 export const MAX_ROAD_WIDTH = ROAD_WIDTHS['grand-avenue'];
 
-const LANDMARK_PERIOD = 10;
-const LANDMARK_OFFSET_X = 2;
-const LANDMARK_OFFSET_Z = 1;
 const RIVER_BASE_X = CONFIG.chunkSize * 5.5;
 const RIVER_WAVE_LENGTH = CONFIG.chunkSize * 4;
 const RIVER_AMPLITUDE = CONFIG.chunkSize * 0.55;
@@ -63,25 +88,12 @@ function positiveModulo(value: number, divisor: number): number {
   return ((value % divisor) + divisor) % divisor;
 }
 
-function signedWrappedDistance(value: number, target: number, period: number): number {
-  const wrapped = positiveModulo(value - target + period / 2, period) - period / 2;
-  return wrapped;
-}
-
 function hash2D(x: number, z: number): number {
-  const value = Math.imul(x + 1703, 73856093) ^ Math.imul(z - 2909, 19349663);
-  return Math.abs(value | 0);
+  return hashCoordinates(x, z);
 }
 
 function roadClassFor(lineIndex: number, axis: 'x' | 'z'): RoadClass {
-  // Long, uninterrupted axes form the readable city skeleton. The different
-  // periods stop every major intersection from becoming an identical square.
-  const grandPeriod = axis === 'x' ? 10 : 8;
-  if (positiveModulo(lineIndex, grandPeriod) === 0) return 'grand-avenue';
-
-  const avenueOffset = axis === 'x' ? 1 : 2;
-  if (positiveModulo(lineIndex + avenueOffset, 4) === 0) return 'avenue';
-  return 'street';
+  return plannedRoadClass(lineIndex, axis);
 }
 
 export function riverCenterAt(worldZ: number): number {
@@ -106,18 +118,25 @@ function riverPlanFor(chunkX: number, chunkZ: number): RiverPlan | null {
 export function createChunkUrbanPlan(chunkX: number, chunkZ: number): ChunkUrbanPlan {
   const verticalRoad = roadClassFor(chunkX, 'x');
   const horizontalRoad = roadClassFor(chunkZ, 'z');
-  const dx = signedWrappedDistance(chunkX, LANDMARK_OFFSET_X, LANDMARK_PERIOD);
-  const dz = signedWrappedDistance(chunkZ, LANDMARK_OFFSET_Z, LANDMARK_PERIOD);
-  const landmarkDistance = Math.hypot(dx, dz);
+  const landmarkInfluence = nearestLandmark(chunkX, chunkZ);
+  const landmarkDistance = landmarkInfluence.distance;
   const landmark = landmarkDistance < 0.1;
-  const macroX = Math.floor((chunkX - LANDMARK_OFFSET_X) / LANDMARK_PERIOD);
-  const macroZ = Math.floor((chunkZ - LANDMARK_OFFSET_Z) / LANDMARK_PERIOD);
-  const landmarkVariant = hash2D(macroX, macroZ) % 3;
+  const gameplay = gameplayZoneFor(chunkX, chunkZ, landmark);
+  const landmarkVariant = landmarkInfluence.variant;
   const landmarkLot = landmarkVariant === 0 ? 0 : landmarkVariant === 1 ? 3 : 1;
-  const roundabout = verticalRoad === 'grand-avenue'
-    && horizontalRoad === 'grand-avenue'
-    && positiveModulo(chunkX / 2 + chunkZ, 2) === 0;
+  const roundabout = isCivicIntersection(chunkX, chunkZ);
   const river = riverPlanFor(chunkX, chunkZ);
+  // Neighbouring chunks share a broader development history. This makes a
+  // district read as a coherent piece of city instead of independent dice rolls.
+  const eraMacroX = Math.floor(chunkX / 4);
+  const eraMacroZ = Math.floor(chunkZ / 4);
+  const macroHash = hash2D(eraMacroX, eraMacroZ);
+  const eraRoll = positiveModulo(macroHash, 100) / 100;
+  const developmentEra: DevelopmentEra = eraRoll < 0.24
+    ? 'historic'
+    : eraRoll < 0.5 ? 'postwar' : eraRoll < 0.78 ? 'modern' : 'contemporary';
+  const blockHeightBias = 0.88 + positiveModulo(macroHash >> 3, 25) / 100;
+  const parcelRhythm = positiveModulo(hash2D(chunkX, chunkZ), 4);
   const onMajorAxis = verticalRoad === 'grand-avenue' || horizontalRoad === 'grand-avenue';
   const onAvenue = verticalRoad !== 'street' || horizontalRoad !== 'street';
   const civic = !landmark && !river && roundabout;
@@ -152,8 +171,13 @@ export function createChunkUrbanPlan(chunkX: number, chunkZ: number): ChunkUrban
   }
 
   const civicOpenLot = hash2D(chunkX, chunkZ) % 4;
-  const openSpaceLots = landmark
-    ? [0, 1, 2, 3].filter((index) => index !== landmarkLot)
+  const arenaOpenLots = [gameplay.arenaVariant % 4];
+  const openSpaceLots = gameplay.kind === 'safe-hub'
+    ? [0]
+    : gameplay.kind === 'combat-arena'
+      ? arenaOpenLots
+      : landmark
+    ? [(landmarkLot + 2) % 4]
     : civic ? [civicOpenLot] : [];
 
   return {
@@ -169,9 +193,73 @@ export function createChunkUrbanPlan(chunkX: number, chunkZ: number): ChunkUrban
     landmarkLot,
     openSpaceLots,
     roundabout,
-    diagonalBoulevard: !roundabout && positiveModulo(chunkX - chunkZ, 9) === 0,
+    diagonalBoulevard: !roundabout && hasDiagonalBoulevard(chunkX, chunkZ),
     river,
+    developmentEra,
+    blockHeightBias,
+    parcelRhythm,
+    gameplayZone: gameplay.kind,
+    dangerTier: gameplay.dangerTier,
+    arenaVariant: gameplay.arenaVariant,
   };
+}
+
+/**
+ * Subdivide the four pieces around a crossroad into street-fronting parcels.
+ * Chunk coordinates remain a streaming concern; the parcel rhythm and shared
+ * macro history prevent every chunk from reading as the same four toy lots.
+ */
+export function createLocalParcelPlans(
+  plan: ChunkUrbanPlan,
+  lotInnerX: number,
+  lotInnerZ: number,
+  lotOuterEdge: number,
+): LocalParcelPlan[] {
+  const parcels: LocalParcelPlan[] = [];
+  const fullSpanX = lotOuterEdge - lotInnerX;
+  const fullSpanZ = lotOuterEdge - lotInnerZ;
+  let lotIndex = 0;
+
+  for (const signX of [-1, 1]) {
+    for (const signZ of [-1, 1]) {
+      const quadrantIndex = (signX > 0 ? 2 : 0) + (signZ > 0 ? 1 : 0);
+      const landmarkLot = plan.landmark && quadrantIndex === plan.landmarkLot;
+      const openLot = plan.openSpaceLots.includes(quadrantIndex);
+      const streetAxis: 'x' | 'z' = positiveModulo(
+        plan.parcelRhythm + quadrantIndex,
+        2,
+      ) === 0 ? 'x' : 'z';
+      const denseDistrict = plan.district === 'commercial-core'
+        || plan.district === 'boulevard'
+        || plan.district === 'neighborhood';
+      const divisions = landmarkLot || openLot
+        ? 1
+        : denseDistrict ? (plan.developmentEra === 'historic' ? 3 : 2) : 2;
+
+      for (let division = 0; division < divisions; division += 1) {
+        const spanX = streetAxis === 'x' ? fullSpanX : fullSpanX / divisions;
+        const spanZ = streetAxis === 'z' ? fullSpanZ : fullSpanZ / divisions;
+        const centerX = streetAxis === 'x'
+          ? (lotInnerX + lotOuterEdge) / 2
+          : lotInnerX + spanX * (division + 0.5);
+        const centerZ = streetAxis === 'z'
+          ? (lotInnerZ + lotOuterEdge) / 2
+          : lotInnerZ + spanZ * (division + 0.5);
+        parcels.push({
+          lotIndex,
+          quadrantIndex,
+          localX: centerX * signX,
+          localZ: centerZ * signZ,
+          spanX,
+          spanZ,
+          streetAxis,
+          corner: division === 0 || division === divisions - 1,
+        });
+        lotIndex += 1;
+      }
+    }
+  }
+  return parcels;
 }
 
 export function chooseBuildingArchetype(
@@ -183,6 +271,20 @@ export function chooseBuildingArchetype(
     return plan.landmarkVariant === 0
       ? 'needle'
       : plan.landmarkVariant === 1 ? 'art-deco' : 'wedge';
+  }
+
+  // Older quarters keep a narrow masonry street wall even when they sit near
+  // valuable avenues. Newer quarters are more likely to consolidate parcels
+  // into podium developments.
+  if (plan.developmentEra === 'historic'
+    && plan.district !== 'landmark-core'
+    && roll < 0.42) {
+    return roll < 0.29 ? 'brick-midrise' : 'courtyard';
+  }
+  if (plan.developmentEra === 'contemporary'
+    && (plan.district === 'commercial-core' || plan.district === 'boulevard')
+    && roll < 0.26) {
+    return 'podium-tower';
   }
 
   switch (plan.district) {

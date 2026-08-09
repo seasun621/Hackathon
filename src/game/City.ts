@@ -1,19 +1,44 @@
 import * as THREE from 'three';
 import type { RigidBody, World } from '@dimforge/rapier3d-compat';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
+import cloudLayerUrl from '../../assets/environment/natural-cel-cloud-layer-v3.png';
 import { CONFIG } from './config';
 import {
   MAX_ROAD_WIDTH,
   chooseBuildingArchetype,
+  createLocalParcelPlans,
   createChunkUrbanPlan,
   riverCenterAt,
 } from './UrbanPlan';
+import {
+  createBuildingTraversalAnchors,
+  validateAnchorCoverage,
+} from './TraversalPlanner';
 
 interface CityChunk {
   group: THREE.Group;
   bodies: RigidBody[];
   meshes: THREE.Mesh[];
   anchors: THREE.Vector3[];
+  centerX: number;
+  centerZ: number;
+  traffic: TrafficAnimation | null;
+}
+
+interface TrafficCar {
+  alongX: boolean;
+  lane: number;
+  phase: number;
+  speed: number;
+  direction: 1 | -1;
+}
+
+interface TrafficAnimation {
+  mesh: THREE.InstancedMesh;
+  centerX: number;
+  centerZ: number;
+  cars: TrafficCar[];
 }
 
 interface PendingChunk {
@@ -136,14 +161,15 @@ export class City {
   private readonly roadGeometries = new Map<string, THREE.BufferGeometry>();
   private readonly diagonalRoadGeometry = createDiagonalRoadGeometry(18);
   private readonly facadeGeometry = new THREE.PlaneGeometry(1, 1);
-  private readonly buildingMaterial: THREE.MeshBasicMaterial;
+  private readonly buildingMaterial: THREE.MeshStandardMaterial;
   private readonly facadeMaterial: THREE.MeshBasicMaterial;
   private readonly brickFacadeMaterial: THREE.MeshBasicMaterial;
   private readonly verticalFacadeMaterial: THREE.MeshBasicMaterial;
   private readonly curtainFacadeMaterial: THREE.MeshBasicMaterial;
-  private readonly roofMaterial = new THREE.MeshBasicMaterial({
+  private readonly roofMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
-    toneMapped: false,
+    roughness: 0.82,
+    metalness: 0.04,
   });
   private readonly antennaMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -151,6 +177,13 @@ export class City {
     metalness: 0.16,
   });
   private readonly roadMaterial: THREE.MeshStandardMaterial;
+  private readonly sidewalkMaterial = new THREE.MeshStandardMaterial({
+    color: 0xaaa79f,
+    roughness: 0.98,
+    metalness: 0,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+  });
   private readonly diagonalRoadMaterial: THREE.MeshStandardMaterial;
   private readonly carMaterial = new THREE.MeshBasicMaterial({
     color: 0xffffff,
@@ -161,14 +194,14 @@ export class City {
     toneMapped: false,
   });
   private readonly parkMaterial = new THREE.MeshStandardMaterial({
-    color: 0x6e9a67,
+    color: 0x66775f,
     roughness: 1,
     metalness: 0,
     polygonOffset: true,
     polygonOffsetFactor: -4,
   });
   private readonly waterMaterial = new THREE.MeshStandardMaterial({
-    color: 0x4d9fbd,
+    color: 0x4f7888,
     roughness: 0.34,
     metalness: 0.12,
     transparent: true,
@@ -181,16 +214,20 @@ export class City {
   private lastCenterZ = Number.NaN;
   private lastPrefetchX = Number.NaN;
   private lastPrefetchZ = Number.NaN;
+  private lastTrafficUpdate = 0;
+  private readonly trafficTransform = new THREE.Object3D();
+  private readonly aerialEnvironment: THREE.Group;
 
   constructor(
     private readonly scene: THREE.Scene,
     private readonly world: World,
     private readonly textureAnisotropy: number,
   ) {
-    this.buildingMaterial = new THREE.MeshBasicMaterial({
+    this.buildingMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       fog: true,
-      toneMapped: false,
+      roughness: 0.7,
+      metalness: 0.08,
     });
     this.facadeMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -201,7 +238,7 @@ export class City {
       polygonOffset: true,
       polygonOffsetFactor: -2,
       side: THREE.DoubleSide,
-      toneMapped: false,
+      toneMapped: true,
     });
     this.brickFacadeMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -212,7 +249,7 @@ export class City {
       polygonOffset: true,
       polygonOffsetFactor: -2,
       side: THREE.DoubleSide,
-      toneMapped: false,
+      toneMapped: true,
     });
     this.verticalFacadeMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -223,7 +260,7 @@ export class City {
       polygonOffset: true,
       polygonOffsetFactor: -2,
       side: THREE.DoubleSide,
-      toneMapped: false,
+      toneMapped: true,
     });
     this.curtainFacadeMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -233,7 +270,7 @@ export class City {
       polygonOffset: true,
       polygonOffsetFactor: -2,
       side: THREE.DoubleSide,
-      toneMapped: false,
+      toneMapped: true,
     });
     this.roadMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
@@ -249,11 +286,13 @@ export class City {
     this.diagonalRoadMaterial.polygonOffsetUnits = -5;
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(12000, 12000),
-      new THREE.MeshStandardMaterial({ color: 0x8f9288, roughness: 1, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ color: 0x777975, roughness: 1, metalness: 0 }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.55;
     this.scene.add(ground);
+    this.aerialEnvironment = this.createAerialEnvironment();
+    this.scene.add(this.aerialEnvironment);
 
     const groundBody = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.fixed().setTranslation(0, -1, 0),
@@ -262,6 +301,11 @@ export class City {
   }
 
   update(playerPosition: THREE.Vector3, viewDirection?: THREE.Vector3): void {
+    // A slow-following horizon keeps the procedural world visually bounded
+    // without introducing gameplay geometry or a finite map edge.
+    this.aerialEnvironment.position.x = playerPosition.x * 0.86;
+    this.aerialEnvironment.position.y = 0;
+    this.aerialEnvironment.position.z = playerPosition.z * 0.86;
     const centerX = Math.floor(playerPosition.x / CONFIG.chunkSize);
     const centerZ = Math.floor(playerPosition.z / CONFIG.chunkSize);
     const firstUpdate = Number.isNaN(this.lastCenterX);
@@ -333,6 +377,18 @@ export class City {
       this.removeChunk(key, chunk);
       break;
     }
+
+    const now = performance.now() * 0.001;
+    if (now - this.lastTrafficUpdate >= 1 / 30) {
+      this.lastTrafficUpdate = now;
+      for (const chunk of this.chunks.values()) {
+        if (!chunk.traffic) continue;
+        const dx = chunk.centerX - playerPosition.x;
+        const dz = chunk.centerZ - playerPosition.z;
+        if (dx * dx + dz * dz > (CONFIG.chunkSize * 2.4) ** 2) continue;
+        this.updateTraffic(chunk.traffic, now);
+      }
+    }
   }
 
   getBuildingMeshes(): THREE.Mesh[] {
@@ -345,6 +401,8 @@ export class City {
     let bestScore = Number.POSITIVE_INFINITY;
 
     for (const chunk of this.chunks.values()) {
+      if (Math.abs(chunk.centerX - playerPosition.x) > CONFIG.ropeMaxRange + 90
+        || Math.abs(chunk.centerZ - playerPosition.z) > CONFIG.ropeMaxRange + 90) continue;
       for (const anchor of chunk.anchors) {
         this.anchorDelta.copy(anchor).sub(playerPosition);
         const distance = this.anchorDelta.length();
@@ -385,12 +443,7 @@ export class City {
     const lotOuterEdge = CONFIG.chunkSize / 2 - 6;
     const lotInnerX = verticalRoadWidth / 2 + 3;
     const lotInnerZ = horizontalRoadWidth / 2 + 3;
-    const lotSpanX = lotOuterEdge - lotInnerX;
-    const lotSpanZ = lotOuterEdge - lotInnerZ;
-    const lotCenterX = (lotInnerX + lotOuterEdge) / 2;
-    const lotCenterZ = (lotInnerZ + lotOuterEdge) / 2;
-    const lotCentersX = [-lotCenterX, lotCenterX];
-    const lotCentersZ = [-lotCenterZ, lotCenterZ];
+    const parcels = createLocalParcelPlans(plan, lotInnerX, lotInnerZ, lotOuterEdge);
     const facadeStyle = Math.abs(chunkSeed(chunkX, chunkZ)) % 4;
     const chunkFacadeMaterial = plan.district === 'waterfront'
       || (plan.district === 'commercial-core' && facadeStyle !== 0)
@@ -402,31 +455,37 @@ export class City {
         : facadeStyle === 3
           ? this.curtainFacadeMaterial
           : this.facadeMaterial;
-    const buildings = new THREE.InstancedMesh(this.buildingGeometry, this.buildingMaterial, 16);
-    const tiers = new THREE.InstancedMesh(this.buildingGeometry, this.buildingMaterial, 32);
+    const buildings = new THREE.InstancedMesh(this.buildingGeometry, this.buildingMaterial, 48);
+    const tiers = new THREE.InstancedMesh(this.buildingGeometry, this.buildingMaterial, 72);
     const cylinderBuildings = new THREE.InstancedMesh(
       this.cylinderBuildingGeometry,
       this.buildingMaterial,
-      12,
+      24,
     );
     const cylinderFacades = new THREE.InstancedMesh(
       this.cylinderFacadeGeometry,
       chunkFacadeMaterial,
-      12,
+      24,
     );
-    const crowns = new THREE.InstancedMesh(this.crownGeometry, this.buildingMaterial, 10);
+    const crowns = new THREE.InstancedMesh(this.crownGeometry, this.buildingMaterial, 24);
     const architecturalDetails = new THREE.InstancedMesh(
       this.buildingGeometry,
       this.roofMaterial,
-      64,
+      128,
     );
-    const roofProps = new THREE.InstancedMesh(this.antennaGeometry, this.antennaMaterial, 28);
+    const roofProps = new THREE.InstancedMesh(this.antennaGeometry, this.antennaMaterial, 64);
     const roads = new THREE.Mesh(
       this.getRoadGeometry(verticalRoadWidth, horizontalRoadWidth),
       this.roadMaterial,
     );
     roads.position.set(centerX, -0.44, centerZ);
     roads.renderOrder = 1;
+    const sidewalks = new THREE.Mesh(
+      this.getRoadGeometry(verticalRoadWidth + 7, horizontalRoadWidth + 7),
+      this.sidewalkMaterial,
+    );
+    sidewalks.position.set(centerX, -0.455, centerZ);
+    sidewalks.renderOrder = 0;
     const diagonalRoad = diagonalDistrict
       ? new THREE.Mesh(this.diagonalRoadGeometry, this.diagonalRoadMaterial)
       : null;
@@ -451,23 +510,23 @@ export class City {
       river.scale.set(plan.river.width, 0.08, CONFIG.chunkSize * 1.22);
       river.renderOrder = 0;
     }
-    const facades = new THREE.InstancedMesh(this.facadeGeometry, chunkFacadeMaterial, 96);
+    const facades = new THREE.InstancedMesh(this.facadeGeometry, chunkFacadeMaterial, 256);
     const brickFacades = new THREE.InstancedMesh(
       this.facadeGeometry,
       this.brickFacadeMaterial,
-      96,
+      256,
     );
     const cars = new THREE.InstancedMesh(this.buildingGeometry, this.carMaterial, 20);
     const treeCanopies = new THREE.InstancedMesh(
       this.treeCanopyGeometry,
       this.treeCanopyMaterial,
-      24,
+      48,
     );
     const transform = new THREE.Object3D();
-    const glassColors = [0x91cbd5, 0x7faed0, 0x82c7bb, 0x9eacd0, 0x83b9c7];
-    const brickColors = [0xdd8068, 0xce665c, 0xe19a70, 0xbd7767, 0xd99a7d];
-    const stoneColors = [0xeadfc6, 0xe0c994, 0xcbd7c8, 0xe2ddd2, 0xc1d2bd];
-    const carColors = [0xb73536, 0x35536e, 0xd8d2bf, 0xd19b2d, 0x54705b, 0x777b80];
+    const glassColors = [0x526b73, 0x4c626c, 0x566a65, 0x5a5f6b, 0x49646b];
+    const brickColors = [0x745048, 0x68463f, 0x7c594b, 0x66504a, 0x7d5d50];
+    const stoneColors = [0x9b9589, 0x928875, 0x8b918c, 0x92908a, 0x858d88];
+    const carColors = [0x823f3e, 0x354957, 0xaaa89f, 0x9a783c, 0x4b5d52, 0x616468];
     let buildingIndex = 0;
     let tierIndex = 0;
     let cylinderIndex = 0;
@@ -477,7 +536,6 @@ export class City {
     let facadeIndex = 0;
     let brickFacadeIndex = 0;
     let treeIndex = 0;
-    let lotIndex = 0;
 
     const setInstance = (
       mesh: THREE.InstancedMesh,
@@ -499,19 +557,30 @@ export class City {
       mesh.setColorAt(index, color);
     };
 
-    const addOpenSpace = (localX: number, localZ: number, plaza: boolean): void => {
+    const addOpenSpace = (
+      localX: number,
+      localZ: number,
+      spanX: number,
+      spanZ: number,
+      plaza: boolean,
+    ): void => {
       const x = centerX + localX;
       const z = centerZ + localZ;
+      const openSpaceColor = plan.gameplayZone === 'safe-hub'
+        ? 0x697d6d
+        : plan.gameplayZone === 'combat-arena'
+          ? (plan.arenaVariant === 1 ? 0x887968 : 0x786e6b)
+          : plaza ? 0x999386 : 0x68775f;
       setInstance(
         architecturalDetails,
         detailIndex,
         x,
         -0.39,
         z,
-        lotSpanX * 0.86,
+        spanX * 0.86,
         0.12,
-        lotSpanZ * 0.86,
-        new THREE.Color(plaza ? 0xc8c0aa : 0x7b9d68),
+        spanZ * 0.86,
+        new THREE.Color(openSpaceColor),
       );
       detailIndex += 1;
 
@@ -519,8 +588,8 @@ export class City {
       for (let tree = 0; tree < treeCount; tree += 1) {
         const sideX = tree % 2 === 0 ? -1 : 1;
         const sideZ = tree < 2 ? -1 : 1;
-        const treeX = x + sideX * lotSpanX * (0.22 + random() * 0.08);
-        const treeZ = z + sideZ * lotSpanZ * (0.22 + random() * 0.08);
+        const treeX = x + sideX * spanX * (0.22 + random() * 0.08);
+        const treeZ = z + sideZ * spanZ * (0.22 + random() * 0.08);
         setInstance(
           roofProps,
           propIndex,
@@ -548,45 +617,58 @@ export class City {
       }
     };
 
-    for (const localX of lotCentersX) {
-      for (const localZ of lotCentersZ) {
-        const currentLot = lotIndex;
-        lotIndex += 1;
+    for (const parcel of parcels) {
+        const { localX, localZ, spanX, spanZ, streetAxis, quadrantIndex } = parcel;
         if (diagonalDistrict && Math.sign(localX) === Math.sign(localZ)) continue;
         const riverOverlap = plan.river
           && Math.abs(centerX + localX - riverCenterAt(centerZ + localZ))
-            < plan.river.width / 2 + lotSpanX * 0.22;
-        const plannedOpenSpace = plan.openSpaceLots.includes(currentLot);
-        const densityOpenSpace = !plan.landmark && random() > plan.density;
+            < plan.river.width / 2 + spanX * 0.22;
+        const plannedOpenSpace = plan.openSpaceLots.includes(quadrantIndex);
+        // Density used to be evaluated four times per chunk. With subdivided
+        // frontage parcels, applying the old probability unchanged would turn
+        // whole streets into gaps, so only a restrained share becomes vacant.
+        const parcelOccupancy = 0.992;
+        const densityOpenSpace = !plan.landmark && random() > parcelOccupancy;
         if (riverOverlap || plannedOpenSpace || densityOpenSpace) {
           addOpenSpace(
             localX,
             localZ,
-            plannedOpenSpace && (plan.landmark || plan.district === 'civic'),
+            spanX,
+            spanZ,
+            plannedOpenSpace && (
+              plan.landmark
+              || plan.district === 'civic'
+              || plan.gameplayZone === 'safe-hub'
+              || plan.gameplayZone === 'combat-arena'
+            ),
           );
           continue;
         }
         const architectureRoll = random();
-        const archetype = chooseBuildingArchetype(plan, currentLot, architectureRoll);
+        const archetype = chooseBuildingArchetype(plan, quadrantIndex, architectureRoll);
         const avenue = plan.verticalRoad === 'grand-avenue'
           || plan.horizontalRoad === 'grand-avenue';
         const glassTower = archetype !== 'brick-midrise' && archetype !== 'courtyard';
         const brickMidrise = archetype === 'brick-midrise' || archetype === 'courtyard';
         const widthFactor = archetype === 'cylinder' || archetype === 'needle'
-          ? 0.5 + random() * 0.12
+          ? 0.62 + random() * 0.1
           : archetype === 'courtyard'
-            ? 0.86 + random() * 0.08
+            ? 0.92 + random() * 0.05
             : archetype === 'twin-slab'
-              ? 0.78 + random() * 0.12
-              : 0.62 + random() * 0.18;
+              ? 0.84 + random() * 0.1
+              : 0.88 + random() * 0.08;
         const depthFactor = archetype === 'twin-slab'
-          ? 0.56 + random() * 0.12
+          ? 0.68 + random() * 0.12
           : archetype === 'courtyard'
-            ? 0.86 + random() * 0.08
-            : 0.58 + random() * 0.2;
-        const width = lotSpanX * widthFactor;
-        const depth = lotSpanZ * depthFactor;
-        const targetHeight = plan.landmark
+            ? 0.92 + random() * 0.05
+            : 0.84 + random() * 0.12;
+        const width = spanX * widthFactor;
+        const depth = spanZ * depthFactor;
+        const eraHeightFactor = plan.developmentEra === 'historic'
+          ? 0.76
+          : plan.developmentEra === 'postwar' ? 0.9
+            : plan.developmentEra === 'contemporary' ? 1.08 : 1;
+        const rawTargetHeight = plan.landmark
           ? 238 + random() * 78
           : plan.district === 'commercial-core'
             ? (72 + Math.pow(random(), 0.68) * 76) * plan.skylineScale
@@ -598,12 +680,31 @@ export class City {
                   ? (42 + Math.pow(random(), 0.76) * 66 + (avenue ? 9 : 0))
                     * plan.skylineScale
                   : (28 + Math.pow(random(), 0.9) * 42) * plan.skylineScale;
-        const x = centerX + localX + (random() - 0.5) * Math.min(4, lotSpanX * 0.1);
-        const z = centerZ + localZ + (random() - 0.5) * Math.min(4, lotSpanZ * 0.1);
+        const targetHeight = plan.landmark
+          ? rawTargetHeight
+          : rawTargetHeight * plan.blockHeightBias * eraHeightFactor;
+        // Keep the street wall close to the road edge. Variation happens along
+        // the frontage, not by floating every building around the lot centre.
+        const streetSetback = plan.district === 'neighborhood' ? 2.2 : 0.8;
+        const x = centerX + (streetAxis === 'x'
+          ? (Math.sign(localX) * (lotInnerX + streetSetback + width / 2))
+          : localX + (random() - 0.5) * Math.min(1.2, spanX * 0.04));
+        const z = centerZ + (streetAxis === 'z'
+          ? (Math.sign(localZ) * (lotInnerZ + streetSetback + depth / 2))
+          : localZ + (random() - 0.5) * Math.min(1.2, spanZ * 0.04));
         const palette = glassTower ? glassColors : brickMidrise ? brickColors : stoneColors;
         const facadeColor = new THREE.Color(
           palette[Math.floor(random() * palette.length)],
         );
+        if (plan.dangerTier > 0) {
+          const dangerTint = plan.gameplayZone === 'combat-arena'
+            ? new THREE.Color(0x8c5f5b)
+            : new THREE.Color(0x555c76);
+          facadeColor.lerp(dangerTint, Math.min(0.16, plan.dangerTier * 0.025));
+        }
+        if (plan.gameplayZone === 'reward-landmark') {
+          facadeColor.lerp(new THREE.Color(0x86c8c2), 0.12);
+        }
         let height = targetHeight;
         let roofX = x;
         let roofZ = z;
@@ -614,7 +715,7 @@ export class City {
         let upperColliderDepth = depth;
         let upperColliderOffsetX = 0;
         let upperColliderOffsetZ = 0;
-        const facadeTint = facadeColor.clone().lerp(new THREE.Color(0xe8f4ef), 0.72);
+        const facadeTint = facadeColor.clone().lerp(new THREE.Color(0xb8c2bf), 0.18);
 
         const addFacadeInstance = (
           instanceX: number,
@@ -1039,6 +1140,73 @@ export class City {
           detailIndex += 1;
         }
 
+        // A readable ground floor has more impact at swing height than another
+        // tower silhouette. Reuse the shared detail instances for entrances
+        // and canopies instead of creating per-building meshes or materials.
+        const entranceColor = facadeColor.clone().lerp(new THREE.Color(0x263b43), 0.72);
+        const frontageSign = streetAxis === 'x' ? Math.sign(localX) : Math.sign(localZ);
+        if (streetAxis === 'x') {
+          const facadeX = x - frontageSign * (width / 2 + 0.62);
+          setInstance(
+            architecturalDetails,
+            detailIndex,
+            facadeX,
+            3.15,
+            z,
+            1.35,
+            0.32,
+            Math.min(8.5, depth * 0.5),
+            entranceColor,
+          );
+        } else {
+          const facadeZ = z - frontageSign * (depth / 2 + 0.62);
+          setInstance(
+            architecturalDetails,
+            detailIndex,
+            x,
+            3.15,
+            facadeZ,
+            Math.min(8.5, width * 0.5),
+            0.32,
+            1.35,
+            entranceColor,
+          );
+        }
+        detailIndex += 1;
+
+        if (parcel.corner && plan.district !== 'commercial-core' && treeIndex < 47) {
+          const treeX = streetAxis === 'x'
+            ? x - frontageSign * (width / 2 + 3.1)
+            : x + Math.sign(localX) * Math.min(width * 0.3, 4.5);
+          const treeZ = streetAxis === 'z'
+            ? z - frontageSign * (depth / 2 + 3.1)
+            : z + Math.sign(localZ) * Math.min(depth * 0.3, 4.5);
+          setInstance(
+            roofProps,
+            propIndex,
+            treeX,
+            0.82,
+            treeZ,
+            0.32,
+            2,
+            0.32,
+            new THREE.Color(0x6f5037),
+          );
+          propIndex += 1;
+          setInstance(
+            treeCanopies,
+            treeIndex,
+            treeX,
+            2.9,
+            treeZ,
+            1.35,
+            1.7,
+            1.35,
+            new THREE.Color(plan.district === 'waterfront' ? 0x5f9670 : 0x56865b),
+          );
+          treeIndex += 1;
+        }
+
         if (random() > 0.28 && archetype !== 'needle' && archetype !== 'wedge') {
           const waterTank = random() < 0.48;
           const propHeight = waterTank ? 2.6 : 7 + random() * 8;
@@ -1074,74 +1242,48 @@ export class City {
         }
         bodies.push(body);
 
-        const insetX = tierWidth * 0.35;
-        const insetZ = tierDepth * 0.35;
-        const anchorLevels = roofHeight > CONFIG.ropeMaxRange * 0.92
-          ? [Math.min(78, roofHeight * 0.38), roofHeight * 0.68, roofHeight + 1.4]
-          : [roofHeight + 1.4];
-        for (const anchorHeight of anchorLevels) {
-          anchors.push(
-            new THREE.Vector3(roofX - insetX, anchorHeight, roofZ - insetZ),
-            new THREE.Vector3(roofX + insetX, anchorHeight, roofZ - insetZ),
-            new THREE.Vector3(roofX - insetX, anchorHeight, roofZ + insetZ),
-            new THREE.Vector3(roofX + insetX, anchorHeight, roofZ + insetZ),
-          );
-        }
-      }
+        anchors.push(...createBuildingTraversalAnchors({
+          roofX,
+          roofZ,
+          roofHeight,
+          width: tierWidth,
+          depth: tierDepth,
+        }));
     }
 
-    const streetBody = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-    bodies.push(streetBody);
+    // The validator is intentionally advisory: it improves city generation
+    // without changing selection, rope forces, or any other gameplay system.
+    group.userData.anchorCoverageValid = validateAnchorCoverage(anchors);
+
     const verticalLaneOffset = Math.max(2.7, verticalRoadWidth * 0.22);
     const horizontalLaneOffset = Math.max(2.7, horizontalRoadWidth * 0.22);
-    const carPlacements = [
-      { x: centerX - 42 + random() * 7, z: centerZ - horizontalLaneOffset, alongX: true },
-      { x: centerX + 35 + random() * 7, z: centerZ + horizontalLaneOffset, alongX: true },
-      { x: centerX - verticalLaneOffset, z: centerZ - 18 + random() * 5, alongX: false },
-      { x: centerX + verticalLaneOffset, z: centerZ - 50 + random() * 6, alongX: false },
-      { x: centerX - verticalLaneOffset, z: centerZ + 36 + random() * 6, alongX: false },
-      { x: centerX + 17 + random() * 5, z: centerZ - horizontalLaneOffset, alongX: true },
-      { x: centerX - 17 + random() * 5, z: centerZ + horizontalLaneOffset, alongX: true },
-      { x: centerX + 47 + random() * 5, z: centerZ - horizontalLaneOffset, alongX: true },
-      { x: centerX + verticalLaneOffset, z: centerZ + 12 + random() * 5, alongX: false },
-      { x: centerX + verticalLaneOffset, z: centerZ + 48 + random() * 5, alongX: false },
-    ];
+    const trafficCars: TrafficCar[] = [];
+    const trafficCount = plan.gameplayZone === 'safe-hub'
+      ? 0
+      : plan.gameplayZone === 'combat-arena' ? 3 : 6;
+    for (let carIndex = 0; carIndex < trafficCount; carIndex += 1) {
+      const alongX = carIndex % 2 === 0;
+      const direction: 1 | -1 = carIndex % 4 < 2 ? 1 : -1;
+      trafficCars.push({
+        alongX,
+        lane: direction * (alongX ? horizontalLaneOffset : verticalLaneOffset),
+        phase: random() * CONFIG.chunkSize,
+        speed: 7.5 + random() * 5.5,
+        direction,
+      });
+    }
     let carVisualIndex = 0;
-    for (const placement of carPlacements) {
+    for (let trafficIndex = 0; trafficIndex < trafficCars.length; trafficIndex += 1) {
       const carColor = new THREE.Color(carColors[Math.floor(random() * carColors.length)]);
-      const bodyWidth = placement.alongX ? 6.2 : 2.7;
-      const bodyDepth = placement.alongX ? 2.7 : 6.2;
-      const cabinWidth = placement.alongX ? 3.55 : 2.18;
-      const cabinDepth = placement.alongX ? 2.18 : 3.55;
-      const bodyHeight = 0.98;
-      const cabinHeight = 0.74;
-      const roadSurface = -0.44;
-
-      transform.position.set(placement.x, roadSurface + bodyHeight / 2, placement.z);
-      transform.scale.set(bodyWidth, bodyHeight, bodyDepth);
-      transform.updateMatrix();
-      cars.setMatrixAt(carVisualIndex, transform.matrix);
       cars.setColorAt(carVisualIndex, carColor);
       carVisualIndex += 1;
-
-      transform.position.set(
-        placement.x,
-        roadSurface + bodyHeight + cabinHeight / 2 - 0.1,
-        placement.z,
-      );
-      transform.scale.set(cabinWidth, cabinHeight, cabinDepth);
-      transform.updateMatrix();
-      cars.setMatrixAt(carVisualIndex, transform.matrix);
       cars.setColorAt(carVisualIndex, new THREE.Color(0x526b78));
       carVisualIndex += 1;
-
-      const colliderHeight = bodyHeight + cabinHeight - 0.1;
-      this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(bodyWidth / 2, colliderHeight / 2, bodyDepth / 2)
-          .setTranslation(placement.x, roadSurface + colliderHeight / 2, placement.z),
-        streetBody,
-      );
     }
+    const traffic = trafficCars.length > 0
+      ? { mesh: cars, centerX, centerZ, cars: trafficCars }
+      : null;
+    if (traffic) this.updateTraffic(traffic, performance.now() * 0.001);
 
     buildings.userData.isBuilding = true;
     tiers.userData.isBuilding = true;
@@ -1188,10 +1330,16 @@ export class City {
     if (treeCanopies.instanceColor) treeCanopies.instanceColor.needsUpdate = true;
     if (treeIndex > 0) treeCanopies.computeBoundingSphere();
     cars.count = carVisualIndex;
-    cars.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    cars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     if (cars.instanceColor) cars.instanceColor.needsUpdate = true;
-    cars.computeBoundingSphere();
-    group.add(roads, cars);
+    if (carVisualIndex > 0) {
+      cars.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(centerX, 0, centerZ),
+        CONFIG.chunkSize * 0.82,
+      );
+    }
+    group.add(sidewalks, roads);
+    if (carVisualIndex > 0) group.add(cars);
     if (river) group.add(river);
     if (roundaboutIsland) group.add(roundaboutIsland);
     if (diagonalRoad) group.add(diagonalRoad);
@@ -1223,7 +1371,43 @@ export class City {
     }
 
     this.scene.add(group);
-    this.chunks.set(key, { group, bodies, meshes, anchors });
+    this.chunks.set(key, { group, bodies, meshes, anchors, centerX, centerZ, traffic });
+  }
+
+  private updateTraffic(traffic: TrafficAnimation, time: number): void {
+    const routeLength = CONFIG.chunkSize + 28;
+    const roadSurface = -0.44;
+    let instanceIndex = 0;
+    for (const car of traffic.cars) {
+      const progress = ((car.phase + time * car.speed * car.direction) % routeLength
+        + routeLength) % routeLength - routeLength / 2;
+      const x = car.alongX ? traffic.centerX + progress : traffic.centerX + car.lane;
+      const z = car.alongX ? traffic.centerZ + car.lane : traffic.centerZ + progress;
+      const bodyWidth = car.alongX ? 5.1 : 2.15;
+      const bodyDepth = car.alongX ? 2.15 : 5.1;
+      const cabinWidth = car.alongX ? 2.9 : 1.78;
+      const cabinDepth = car.alongX ? 1.78 : 2.9;
+      const bodyHeight = 0.82;
+      const cabinHeight = 0.62;
+
+      this.trafficTransform.position.set(x, roadSurface + bodyHeight / 2, z);
+      this.trafficTransform.rotation.set(0, 0, 0);
+      this.trafficTransform.scale.set(bodyWidth, bodyHeight, bodyDepth);
+      this.trafficTransform.updateMatrix();
+      traffic.mesh.setMatrixAt(instanceIndex, this.trafficTransform.matrix);
+      instanceIndex += 1;
+
+      this.trafficTransform.position.set(
+        x,
+        roadSurface + bodyHeight + cabinHeight / 2 - 0.08,
+        z,
+      );
+      this.trafficTransform.scale.set(cabinWidth, cabinHeight, cabinDepth);
+      this.trafficTransform.updateMatrix();
+      traffic.mesh.setMatrixAt(instanceIndex, this.trafficTransform.matrix);
+      instanceIndex += 1;
+    }
+    traffic.mesh.instanceMatrix.needsUpdate = true;
   }
 
   private removeChunk(key: string, chunk: CityChunk): void {
@@ -1246,6 +1430,333 @@ export class City {
     return geometry;
   }
 
+  private createAerialEnvironment(): THREE.Group {
+    const environment = new THREE.Group();
+    environment.name = 'city-aerial-environment';
+
+    const blueLift = new THREE.Mesh(
+      new THREE.SphereGeometry(458, 24, 14),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        transparent: true,
+        depthWrite: false,
+        fog: false,
+        vertexShader: `
+          varying float vHeight;
+          void main() {
+            vHeight = normalize(position).y;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          varying float vHeight;
+          void main() {
+            float zenith = smoothstep(-0.08, 0.92, vHeight);
+            vec3 color = mix(vec3(0.2, 0.58, 0.78), vec3(0.015, 0.25, 0.62), zenith);
+            gl_FragColor = vec4(color, 0.12 + zenith * 0.34);
+          }
+        `,
+      }),
+    );
+    blueLift.frustumCulled = false;
+    blueLift.renderOrder = -1001;
+    environment.add(blueLift);
+
+    const cloudTexture = this.createCloudLayerTexture();
+    const skyMaterial = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+      uniforms: {
+        cloudMap: { value: cloudTexture },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        uniform sampler2D cloudMap;
+        void main() {
+          vec4 cloud = texture2D(cloudMap, vUv);
+          float lowerPoleFade = smoothstep(0.08, 0.25, vUv.y);
+          float upperPoleFade = 1.0 - smoothstep(0.76, 0.94, vUv.y);
+          float naturalCoverage = lowerPoleFade * upperPoleFade;
+          gl_FragColor = vec4(cloud.rgb, cloud.a * naturalCoverage * 0.9);
+        }
+      `,
+    });
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(460, 32, 20), skyMaterial);
+    sky.frustumCulled = false;
+    sky.renderOrder = -1000;
+    environment.add(sky);
+
+    const sunPosition = new THREE.Vector3(-245, 250, -255);
+    const sunCore = new THREE.Mesh(
+      new THREE.SphereGeometry(7.5, 18, 12),
+      new THREE.MeshBasicMaterial({
+        color: 0xfff5cf,
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        opacity: 0.96,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    sunCore.position.copy(sunPosition);
+    sunCore.renderOrder = -8;
+    environment.add(sunCore);
+
+    const lensflare = new Lensflare();
+    const flareTexture = this.createSunHaloTexture();
+    const ghostTexture = this.createLensGhostTexture();
+    const streakTexture = this.createAnamorphicFlareTexture();
+    lensflare.addElement(new LensflareElement(flareTexture, 224, 0, new THREE.Color(0xfff4d4)));
+    lensflare.addElement(new LensflareElement(streakTexture, 440, 0.012, new THREE.Color(0xd4edff)));
+    lensflare.addElement(new LensflareElement(ghostTexture, 54, 0.34, new THREE.Color(0xffd49a)));
+    lensflare.addElement(new LensflareElement(ghostTexture, 78, 0.61, new THREE.Color(0x9fc7df)));
+    lensflare.addElement(new LensflareElement(ghostTexture, 44, 0.82, new THREE.Color(0xb5a3ca)));
+    sunCore.add(lensflare);
+
+    const mountainPositions: number[] = [];
+    const mountainColors: number[] = [];
+    const mountainSegments = 72;
+    const heights: number[] = [];
+    const radii: number[] = [];
+    for (let index = 0; index <= mountainSegments; index += 1) {
+      const broad = Math.sin(index * 0.47) * 34 + Math.sin(index * 0.19 + 1.7) * 46;
+      const ridge = Math.abs(Math.sin(index * 1.37)) * 38;
+      heights.push(62 + broad + ridge);
+      radii.push(390 + Math.sin(index * 0.63) * 28);
+    }
+    const pushMountainVertex = (x: number, y: number, z: number, top: boolean): void => {
+      mountainPositions.push(x, y, z);
+      const color = new THREE.Color(top ? 0x78939b : 0xaebfc0);
+      mountainColors.push(color.r, color.g, color.b);
+    };
+    for (let index = 0; index < mountainSegments; index += 1) {
+      const angle0 = (index / mountainSegments) * Math.PI * 2;
+      const angle1 = ((index + 1) / mountainSegments) * Math.PI * 2;
+      const x0 = Math.cos(angle0) * radii[index];
+      const z0 = Math.sin(angle0) * radii[index];
+      const x1 = Math.cos(angle1) * radii[index + 1];
+      const z1 = Math.sin(angle1) * radii[index + 1];
+      pushMountainVertex(x0, -22, z0, false);
+      pushMountainVertex(x1, -22, z1, false);
+      pushMountainVertex(x1, heights[index + 1], z1, true);
+      pushMountainVertex(x0, -22, z0, false);
+      pushMountainVertex(x1, heights[index + 1], z1, true);
+      pushMountainVertex(x0, heights[index], z0, true);
+    }
+    const mountainGeometry = new THREE.BufferGeometry();
+    mountainGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(mountainPositions, 3),
+    );
+    mountainGeometry.setAttribute('color', new THREE.Float32BufferAttribute(mountainColors, 3));
+    mountainGeometry.computeVertexNormals();
+    const mountains = new THREE.Mesh(
+      mountainGeometry,
+      new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        side: THREE.DoubleSide,
+        fog: false,
+      }),
+    );
+    mountains.visible = false;
+
+    // A low atmospheric wall suggests a continuing city beyond streamed
+    // chunks without showing a floating mountain silhouette or open void.
+    const distantCityHaze = new THREE.Mesh(
+      new THREE.CylinderGeometry(420, 420, 105, 64, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0x8fa1a4,
+        transparent: true,
+        opacity: 0.34,
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    distantCityHaze.position.y = 12;
+    distantCityHaze.renderOrder = -15;
+    environment.add(distantCityHaze);
+
+    return environment;
+  }
+
+  private createCloudLayerTexture(): THREE.Texture {
+    const generatedSky = new THREE.TextureLoader().load(cloudLayerUrl);
+    generatedSky.colorSpace = THREE.SRGBColorSpace;
+    generatedSky.wrapS = THREE.RepeatWrapping;
+    generatedSky.wrapT = THREE.ClampToEdgeWrapping;
+    generatedSky.magFilter = THREE.LinearFilter;
+    generatedSky.minFilter = THREE.LinearMipmapLinearFilter;
+    generatedSky.anisotropy = Math.min(4, this.textureAnisotropy);
+    return generatedSky;
+    /* Previous procedural fallback retained temporarily for reference.
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not create the sky panorama texture.');
+
+    const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#0d72bb');
+    gradient.addColorStop(0.28, '#3f9bd2');
+    gradient.addColorStop(0.5, '#91c9e4');
+    gradient.addColorStop(0.62, '#dcecf0');
+    gradient.addColorStop(1, '#e8e4da');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const cloudRandom = seededRandom(0x51c0a7);
+    const drawCloud = (centerX: number, centerY: number, scale: number, opacity: number): void => {
+      context.save();
+      context.globalAlpha = opacity;
+      const shadow = context.createLinearGradient(0, centerY - scale, 0, centerY + scale);
+      shadow.addColorStop(0, 'rgba(255,255,255,.96)');
+      shadow.addColorStop(0.72, 'rgba(245,248,247,.82)');
+      shadow.addColorStop(1, 'rgba(178,201,211,.38)');
+      context.fillStyle = shadow;
+      for (let puff = 0; puff < 7; puff += 1) {
+        const offsetX = (puff - 3) * scale * 0.48 + (cloudRandom() - 0.5) * scale * 0.3;
+        const offsetY = (cloudRandom() - 0.55) * scale * 0.34;
+        context.beginPath();
+        context.ellipse(
+          centerX + offsetX,
+          centerY + offsetY,
+          scale * (0.58 + cloudRandom() * 0.34),
+          scale * (0.22 + cloudRandom() * 0.16),
+          0,
+          0,
+          Math.PI * 2,
+        );
+        context.fill();
+      }
+      context.restore();
+    };
+
+    for (let cloud = 0; cloud < 17; cloud += 1) {
+      const x = cloudRandom() * canvas.width;
+      const y = 118 + cloudRandom() * 155;
+      const scale = 24 + cloudRandom() * 34;
+      drawCloud(x, y, scale, 0.42 + cloudRandom() * 0.35);
+      if (x < scale * 4) drawCloud(x + canvas.width, y, scale, 0.56);
+      if (x > canvas.width - scale * 4) drawCloud(x - canvas.width, y, scale, 0.56);
+    }
+
+    const sunGlow = context.createRadialGradient(770, 196, 2, 770, 196, 72);
+    sunGlow.addColorStop(0, 'rgba(255,249,211,.94)');
+    sunGlow.addColorStop(0.12, 'rgba(255,244,196,.56)');
+    sunGlow.addColorStop(1, 'rgba(255,244,196,0)');
+    context.fillStyle = sunGlow;
+    context.fillRect(690, 116, 160, 160);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.anisotropy = Math.min(4, this.textureAnisotropy);
+    return texture;
+    */
+  }
+
+  private createSunHaloTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not create the sun halo texture.');
+    const glow = context.createRadialGradient(128, 128, 4, 128, 128, 126);
+    glow.addColorStop(0, 'rgba(255,255,241,1)');
+    glow.addColorStop(0.08, 'rgba(255,247,215,1)');
+    glow.addColorStop(0.25, 'rgba(255,228,166,.58)');
+    glow.addColorStop(0.58, 'rgba(255,210,136,.2)');
+    glow.addColorStop(1, 'rgba(255,200,120,0)');
+    context.fillStyle = glow;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.save();
+    context.translate(128, 128);
+    context.globalCompositeOperation = 'lighter';
+    for (let ray = 0; ray < 24; ray += 1) {
+      const angle = (ray / 24) * Math.PI * 2;
+      context.setTransform(1, 0, 0, 1, 128, 128);
+      context.rotate(angle);
+      const length = ray % 3 === 0 ? 112 : ray % 2 === 0 ? 82 : 58;
+      const rayGradient = context.createLinearGradient(10, 0, length, 0);
+      rayGradient.addColorStop(0, 'rgba(255,246,214,.62)');
+      rayGradient.addColorStop(1, 'rgba(255,226,170,0)');
+      context.strokeStyle = rayGradient;
+      context.lineWidth = ray % 3 === 0 ? 1.8 : 0.9;
+      context.beginPath();
+      context.moveTo(10, 0);
+      context.lineTo(length, 0);
+      context.stroke();
+    }
+    context.restore();
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    return texture;
+  }
+
+  private createLensGhostTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not create the lens ghost texture.');
+    const aperture = context.createRadialGradient(128, 128, 10, 128, 128, 124);
+    aperture.addColorStop(0, 'rgba(255,255,255,.13)');
+    aperture.addColorStop(0.46, 'rgba(255,255,255,.09)');
+    aperture.addColorStop(0.72, 'rgba(255,255,255,.14)');
+    aperture.addColorStop(0.9, 'rgba(255,255,255,.025)');
+    aperture.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = aperture;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    return texture;
+  }
+
+  private createAnamorphicFlareTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not create the anamorphic flare texture.');
+    const horizontal = context.createLinearGradient(0, 64, canvas.width, 64);
+    horizontal.addColorStop(0, 'rgba(255,255,255,0)');
+    horizontal.addColorStop(0.38, 'rgba(220,240,255,.07)');
+    horizontal.addColorStop(0.5, 'rgba(255,250,224,.52)');
+    horizontal.addColorStop(0.62, 'rgba(220,240,255,.07)');
+    horizontal.addColorStop(1, 'rgba(255,255,255,0)');
+    const vertical = context.createLinearGradient(0, 46, 0, 82);
+    vertical.addColorStop(0, 'rgba(255,255,255,0)');
+    vertical.addColorStop(0.5, 'rgba(255,255,255,1)');
+    vertical.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = horizontal;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.globalCompositeOperation = 'destination-in';
+    context.fillStyle = vertical;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    return texture;
+  }
+
   private createFacadeTexture(): THREE.CanvasTexture {
     const canvas = document.createElement('canvas');
     canvas.width = 192;
@@ -1254,29 +1765,29 @@ export class City {
     if (!context) throw new Error('Could not create the procedural facade texture.');
     context.clearRect(0, 0, canvas.width, canvas.height);
 
-    const columns = 6;
-    const rows = 12;
+    const columns = 8;
+    const rows = 24;
     const cellWidth = canvas.width / columns;
     const cellHeight = canvas.height / rows;
     for (let row = 0; row < rows; row += 1) {
       for (let column = 0; column < columns; column += 1) {
         const lit = ((row * 7 + column * 11) % 11) > 7;
         context.fillStyle = lit
-          ? '#ffdda0'
-          : (row + column) % 4 === 0 ? '#91cbd7' : '#6597ad';
+          ? '#c9ab79'
+          : (row + column) % 4 === 0 ? '#526a72' : '#42545d';
         context.fillRect(
-          column * cellWidth + 7,
-          row * cellHeight + 7,
-          cellWidth - 14,
-          cellHeight - 14,
+          column * cellWidth + 4,
+          row * cellHeight + 3,
+          cellWidth - 8,
+          cellHeight - 6,
         );
-        context.strokeStyle = 'rgba(250, 247, 232, 0.82)';
-        context.lineWidth = 2;
+        context.strokeStyle = 'rgba(195, 201, 196, 0.48)';
+        context.lineWidth = 1;
         context.strokeRect(
-          column * cellWidth + 6,
-          row * cellHeight + 6,
-          cellWidth - 12,
-          cellHeight - 12,
+          column * cellWidth + 3,
+          row * cellHeight + 2,
+          cellWidth - 6,
+          cellHeight - 4,
         );
       }
     }
@@ -1296,8 +1807,8 @@ export class City {
     if (!context) throw new Error('Could not create the brick facade texture.');
     context.clearRect(0, 0, canvas.width, canvas.height);
 
-    const columns = 4;
-    const rows = 10;
+    const columns = 5;
+    const rows = 14;
     const cellWidth = canvas.width / columns;
     const cellHeight = canvas.height / rows;
     for (let row = 0; row < rows; row += 1) {
@@ -1309,12 +1820,12 @@ export class City {
         const lit = ((row * 3 + column * 7) % 13) > 9;
         context.beginPath();
         context.roundRect(left, top, width, height, [6, 6, 2, 2]);
-        context.fillStyle = lit ? '#ffd38b' : '#496b78';
+        context.fillStyle = lit ? '#c9aa76' : '#3d4c50';
         context.fill();
-        context.strokeStyle = 'rgba(255, 237, 202, 0.92)';
-        context.lineWidth = 3;
+        context.strokeStyle = 'rgba(204, 198, 180, 0.58)';
+        context.lineWidth = 2;
         context.stroke();
-        context.fillStyle = 'rgba(255, 239, 211, 0.76)';
+        context.fillStyle = 'rgba(175, 164, 143, 0.58)';
         context.fillRect(left - 3, top + height + 2, width + 6, 3);
       }
     }
@@ -1334,20 +1845,20 @@ export class City {
     if (!context) throw new Error('Could not create the vertical facade texture.');
     context.clearRect(0, 0, canvas.width, canvas.height);
 
-    const columns = 4;
-    const rows = 8;
+    const columns = 6;
+    const rows = 18;
     const cellWidth = canvas.width / columns;
     const cellHeight = canvas.height / rows;
     for (let row = 0; row < rows; row += 1) {
       for (let column = 0; column < columns; column += 1) {
         const left = column * cellWidth + cellWidth * 0.3;
-        const top = row * cellHeight + 5;
+        const top = row * cellHeight + 3;
         const lit = ((row * 5 + column * 3) % 9) > 6;
-        context.fillStyle = lit ? '#ffe1a6' : column % 2 === 0 ? '#6ea3ba' : '#82bdca';
-        context.fillRect(left, top, cellWidth * 0.4, cellHeight - 10);
-        context.strokeStyle = 'rgba(246, 241, 222, 0.9)';
-        context.lineWidth = 3;
-        context.strokeRect(left - 2, top - 2, cellWidth * 0.4 + 4, cellHeight - 6);
+        context.fillStyle = lit ? '#cbb184' : column % 2 === 0 ? '#4f6974' : '#5d7880';
+        context.fillRect(left, top, cellWidth * 0.4, cellHeight - 6);
+        context.strokeStyle = 'rgba(190, 198, 193, 0.52)';
+        context.lineWidth = 1.5;
+        context.strokeRect(left - 1, top - 1, cellWidth * 0.4 + 2, cellHeight - 4);
       }
     }
 
@@ -1366,10 +1877,10 @@ export class City {
     if (!context) throw new Error('Could not create the curtain-wall facade texture.');
 
     const gradient = context.createLinearGradient(0, 0, canvas.width, 0);
-    gradient.addColorStop(0, '#779eae');
-    gradient.addColorStop(0.46, '#b5d7dc');
-    gradient.addColorStop(0.58, '#7faab8');
-    gradient.addColorStop(1, '#537b90');
+    gradient.addColorStop(0, '#526c76');
+    gradient.addColorStop(0.46, '#78939a');
+    gradient.addColorStop(0.58, '#58747d');
+    gradient.addColorStop(1, '#405b68');
     context.fillStyle = gradient;
     context.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -1377,11 +1888,11 @@ export class City {
       context.fillStyle = x % 48 === 0 ? 'rgba(39, 66, 82, 0.78)' : 'rgba(58, 88, 103, 0.54)';
       context.fillRect(x, 0, x % 48 === 0 ? 4 : 2, canvas.height);
     }
-    for (let y = 0; y <= canvas.height; y += 32) {
+    for (let y = 0; y <= canvas.height; y += 18) {
       context.fillStyle = 'rgba(224, 239, 237, 0.34)';
       context.fillRect(0, y, canvas.width, 2);
-      if ((y / 32) % 5 === 3) {
-        context.fillStyle = 'rgba(255, 218, 151, 0.36)';
+      if ((y / 18) % 7 === 3) {
+        context.fillStyle = 'rgba(211, 181, 126, 0.24)';
         context.fillRect(28 + (y % 64), y + 5, 36, 21);
       }
     }
@@ -1400,14 +1911,27 @@ export class City {
     canvas.height = 512;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Could not create the procedural road texture.');
-    context.fillStyle = '#3b3e41';
+    context.fillStyle = '#34373a';
     context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#d8d1b3';
-    context.fillRect(9, 0, 3, canvas.height);
-    context.fillRect(244, 0, 3, canvas.height);
-    for (let divider = 32; divider < canvas.width; divider += 32) {
-      context.fillStyle = divider === 128 ? '#e7d88a' : 'rgba(230,232,224,.72)';
-      for (let y = 10; y < canvas.height; y += 64) context.fillRect(divider - 1.5, y, 3, 34);
+    // Subtle aggregate and repair patches keep the road from reading as one
+    // perfectly clean toy texture while remaining deterministic and cheap.
+    for (let patch = 0; patch < 34; patch += 1) {
+      const x = (patch * 67) % canvas.width;
+      const y = (patch * 113) % canvas.height;
+      context.fillStyle = patch % 3 === 0 ? 'rgba(20,22,24,.12)' : 'rgba(118,122,120,.06)';
+      context.fillRect(x, y, 18 + (patch % 5) * 7, 5 + (patch % 4) * 3);
+    }
+    context.fillStyle = '#d7d2bd';
+    context.fillRect(10, 0, 2, canvas.height);
+    context.fillRect(244, 0, 2, canvas.height);
+
+    // Two-way urban road: a double centre line and restrained broken lane marks.
+    context.fillStyle = '#d7bb62';
+    context.fillRect(125, 0, 2, canvas.height);
+    context.fillRect(130, 0, 2, canvas.height);
+    for (const divider of [68, 96, 160, 188]) {
+      context.fillStyle = 'rgba(232,234,227,.7)';
+      for (let y = 12; y < canvas.height; y += 72) context.fillRect(divider, y, 2, 31);
     }
 
     const texture = new THREE.CanvasTexture(canvas);
