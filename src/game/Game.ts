@@ -97,6 +97,7 @@ export class Game {
   private mode: RunMode = 'ready';
   private stats: RunStats = this.blankStats();
   private timeRemaining: number = CONFIG.runDuration;
+  private runEndCueStarted = false;
   private focus = 100;
   private stamina = 100;
   private dashFx = 0;
@@ -273,6 +274,10 @@ export class Game {
 
   private updatePlaying(realDt: number): void {
     this.timeRemaining = Math.max(0, this.timeRemaining - realDt);
+    if (!this.runEndCueStarted && this.timeRemaining <= CONFIG.runEndBellLead) {
+      this.runEndCueStarted = true;
+      this.audio.startRunEndCue(CONFIG.runEndBellLead - this.timeRemaining);
+    }
     if (this.timeRemaining <= 0) {
       this.finishRun();
       return;
@@ -531,7 +536,7 @@ export class Game {
     this.dashFx = 1;
     this.shake = Math.max(this.shake, initialLaunch ? 0.82 : 1.08);
     this.audio.dash(charge);
-    if (!initialLaunch) this.showToast(`GAS BURST // ${Math.round(charge * 100)}%`, 'positive');
+    if (!initialLaunch) this.showToast(`${Math.round(charge * 100)}%\nGAS BURST`, 'positive');
   }
 
   private updateCamera(dt: number): void {
@@ -883,12 +888,14 @@ export class Game {
     this.mode = 'playing';
     this.stats = this.blankStats();
     this.timeRemaining = CONFIG.runDuration;
+    this.runEndCueStarted = false;
     this.focus = 100;
     this.stamina = 100;
     this.simulationScale = 1;
     this.physicsAccumulator = 0;
     this.targets.reset();
     this.resetPlayer();
+    this.audio.resetRunEndCue();
     this.audio.resume();
     this.tryDash(true);
     this.hud.results.classList.add('hidden');
@@ -897,8 +904,7 @@ export class Game {
 
   private finishRun(): void {
     this.mode = 'over';
-    this.audio.runComplete();
-    this.audio.setPaused(true);
+    this.audio.setPaused(true, true);
     this.dashTimeRemaining = 0;
     this.detach();
     const accuracy = this.stats.shots > 0 ? Math.round((this.stats.hits / this.stats.shots) * 100) : 0;
@@ -954,6 +960,7 @@ export class Game {
 
     document.addEventListener('mousedown', (event) => {
       if (document.pointerLockElement !== this.renderer.domElement) return;
+      this.audio.resume();
       if (event.button === 0) {
         this.leftHeld = true;
         this.tryAttach();
@@ -967,6 +974,10 @@ export class Game {
 
     document.addEventListener('contextmenu', (event) => event.preventDefault());
     document.addEventListener('keydown', (event) => {
+      if (
+        this.mode === 'playing'
+        && document.pointerLockElement === this.renderer.domElement
+      ) this.audio.resume();
       this.keys.add(event.code);
       if (event.code === 'Space') event.preventDefault();
       if (event.code === 'KeyQ' && !event.repeat) this.tryDash();
@@ -991,6 +1002,9 @@ export class Game {
         this.showPauseMenu();
       }
     });
+
+    this.hud.menuButton.addEventListener('pointerdown', () => this.audio.resume());
+    this.hud.replayButton.addEventListener('pointerdown', () => this.audio.resume());
 
     this.hud.menuButton.addEventListener('click', () => {
       this.audio.resume();
@@ -1061,6 +1075,7 @@ export class Game {
     const [primary, ...detailParts] = message.split('\n');
     const detail = detailParts.join(' ');
     const bomb = message.includes('BOMB');
+    const boost = message.includes('GAS BURST');
     const badge = kind === 'negative'
       ? 'WARNING!'
       : message.includes('GOLD')
@@ -1078,7 +1093,7 @@ export class Game {
     if (badgeElement) badgeElement.textContent = badge;
     if (pointsElement) pointsElement.textContent = primary;
     if (detailElement) detailElement.textContent = detail;
-    this.hud.toast.classList.remove('show', 'positive', 'negative', 'bomb');
+    this.hud.toast.classList.remove('show', 'positive', 'negative', 'bomb', 'boost');
     this.hud.hitFlash.classList.remove('show', 'positive', 'negative', 'bomb');
     void this.hud.toast.offsetWidth;
     void this.hud.hitFlash.offsetWidth;
@@ -1088,6 +1103,7 @@ export class Game {
       this.hud.toast.classList.add('bomb');
       this.hud.hitFlash.classList.add('bomb');
     }
+    if (boost) this.hud.toast.classList.add('boost');
     this.hud.score.classList.remove('score-punch');
     void this.hud.score.offsetWidth;
     this.hud.score.classList.add('score-punch');

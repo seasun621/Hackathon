@@ -26,11 +26,14 @@ export class AudioSystem {
   private focusing = false;
   private ropeRideRequested = false;
   private windRequested = false;
+  private timerCueActive = false;
+  private musicPlayPending = false;
 
   constructor() {
     this.music.loop = true;
     this.music.preload = 'auto';
     this.music.volume = 0;
+    this.music.load();
     this.ropeRide.loop = true;
     this.ropeRide.preload = 'auto';
     this.ropeRide.volume = 0;
@@ -42,6 +45,11 @@ export class AudioSystem {
     this.focusBurst.preload = 'auto';
     this.bombExplosion.preload = 'auto';
     this.timerEnd.preload = 'auto';
+    this.timerEnd.volume = 0.9;
+    this.timerEnd.addEventListener('ended', () => {
+      this.timerCueActive = false;
+      this.timerEnd.currentTime = 0;
+    });
   }
 
   resume(): void {
@@ -57,7 +65,7 @@ export class AudioSystem {
     this.setPaused(false);
   }
 
-  setPaused(paused: boolean): void {
+  setPaused(paused: boolean, keepTimerCue = false): void {
     this.paused = paused;
     if (paused) {
       this.fadeElement(this.music, 0, 320, () => {
@@ -65,10 +73,16 @@ export class AudioSystem {
       });
       this.fadeAndStopLoop(this.ropeRide, 'rope');
       this.fadeAndStopLoop(this.wind, 'wind');
+      if (this.timerCueActive && !keepTimerCue) this.timerEnd.pause();
       return;
     }
     if (!this.mediaEnabled) return;
     this.startMusic();
+    if (this.timerCueActive && this.timerEnd.paused) {
+      void this.timerEnd.play().catch(() => {
+        // A later explicit input gesture resumes the paused countdown cue.
+      });
+    }
   }
 
   setMotionState(
@@ -176,8 +190,26 @@ export class AudioSystem {
     this.tone(115, 0.14, 'square', 0.035, 78);
   }
 
-  runComplete(): void {
-    this.playOneShot(this.timerEnd, 0.9, 1, 0.025, 0.52);
+  startRunEndCue(elapsedSeconds = 0): void {
+    if (!this.mediaEnabled || this.paused || this.timerCueActive) return;
+    this.timerCueActive = true;
+    this.timerEnd.pause();
+    this.timerEnd.playbackRate = 1;
+    this.timerEnd.volume = 0.9;
+    try {
+      this.timerEnd.currentTime = Math.max(0, elapsedSeconds);
+    } catch {
+      this.timerEnd.currentTime = 0;
+    }
+    void this.timerEnd.play().catch(() => {
+      this.timerCueActive = false;
+    });
+  }
+
+  resetRunEndCue(): void {
+    this.timerCueActive = false;
+    this.timerEnd.pause();
+    this.timerEnd.currentTime = 0;
   }
 
   private startMusic(): void {
@@ -186,11 +218,21 @@ export class AudioSystem {
       this.fadeElement(this.music, target, 560);
       return;
     }
-    this.music.volume = 0;
+
+    // Apply an audible floor and start the fade immediately. Waiting for the
+    // play() promise kept the track at volume 0 while the large MP3 buffered;
+    // the next focus input appeared to "unlock" it only because it started a
+    // second volume transition.
+    this.music.volume = Math.max(this.music.volume, target * 0.42);
+    this.fadeElement(this.music, target, 420);
+    if (this.musicPlayPending) return;
+    this.musicPlayPending = true;
     void this.music.play().then(() => {
-      if (!this.paused) this.fadeElement(this.music, target, 620);
+      this.musicPlayPending = false;
+      if (!this.paused) this.fadeElement(this.music, target, 320);
     }).catch(() => {
-      // A later pointer or keyboard gesture calls resume again.
+      this.musicPlayPending = false;
+      // The next explicit pointer or keyboard gesture retries playback.
     });
   }
 

@@ -1,5 +1,6 @@
 export const CONFIG = {
   runDuration: 90,
+  runEndBellLead: 10.555,
   gravity: -38,
   airAcceleration: 15,
   walkSpeed: 3.2,

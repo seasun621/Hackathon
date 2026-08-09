@@ -771,6 +771,32 @@ button:hover { filter: brightness(1.2); transform: translateY(-2px); }
   font-size: 13px;
 }
 
+.meter-action-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.meter-action-label b {
+  display: inline-block;
+  min-width: 28px;
+  padding: 2px 7px 1px;
+  color: var(--ink);
+  background: var(--cyan);
+  clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%);
+  font: italic 800 10px 'KBL Jump Condensed', sans-serif;
+  letter-spacing: .04em;
+  text-align: center;
+  text-shadow: none;
+  transform: rotate(3deg) skewX(-5deg);
+}
+
+.stamina-meter .meter-action-label b {
+  color: #291401;
+  background: var(--gold);
+  transform: rotate(-4deg) skewX(-6deg);
+}
+
 .meter-label-row strong {
   color: #fff;
   font: italic 900 22px 'KBL Court', sans-serif;
@@ -887,6 +913,32 @@ button:hover { filter: brightness(1.2); transform: translateY(-2px); }
   text-shadow: 5px 6px 0 #641028, 0 0 28px rgba(255, 36, 78, .92);
 }
 .toast.bomb { scale: 1.04; }
+.toast.boost .toast-badge {
+  color: var(--ink);
+  background: var(--cyan);
+  transform: translateX(-14px) rotate(-5deg);
+}
+
+.toast.boost .toast-points {
+  margin-top: -1px;
+  margin-left: 18px;
+  padding: 5px 23px 3px 15px;
+  color: #fff8bf;
+  background: rgba(8, 20, 35, .86);
+  clip-path: polygon(8px 0, 100% 0, calc(100% - 16px) 100%, 0 100%);
+  -webkit-text-stroke-color: var(--orange);
+  transform: rotate(2deg);
+}
+
+.toast.boost .toast-detail {
+  margin-top: -2px;
+  margin-left: 58px;
+  color: var(--ink);
+  background: linear-gradient(105deg, var(--gold), var(--orange));
+  border-left: 0;
+  transform: rotate(-3deg);
+  text-shadow: none;
+}
 .toast.show { animation: toast-slam .9s cubic-bezier(.08,.78,.2,1) both; }
 
 .hit-flash {

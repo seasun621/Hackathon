@@ -39,12 +39,12 @@ root.innerHTML = `
     <div class="bottom-hud">
       <div class="meter-stack">
         <div class="meter">
-          <div class="metric-label">FOCUS // SPACE</div>
+          <div class="metric-label meter-action-label"><span>FOCUS</span><b>SPACE</b></div>
           <div class="meter-track"><div id="focusFill" class="meter-fill"></div></div>
         </div>
         <div id="staminaMeter" class="meter stamina-meter">
           <div class="meter-label-row">
-            <div class="metric-label">GAS THRUST // Q</div>
+            <div class="metric-label meter-action-label"><span>GAS THRUST</span><b>Q</b></div>
             <strong id="staminaValue">100%</strong>
           </div>
           <div class="meter-track stamina-track"><div id="staminaFill" class="meter-fill stamina-fill"></div></div>
