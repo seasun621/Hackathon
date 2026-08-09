@@ -897,6 +897,7 @@ export class Game {
 
   private finishRun(): void {
     this.mode = 'over';
+    this.audio.runComplete();
     this.audio.setPaused(true);
     this.dashTimeRemaining = 0;
     this.detach();

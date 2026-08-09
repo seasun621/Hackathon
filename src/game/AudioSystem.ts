@@ -5,6 +5,7 @@ import musicUrl from '../../sound/브금임시.mp3?url';
 import focusSoundUrl from '../../sound/시간정지.mp3?url';
 import windSoundUrl from '../../sound/활공 바람.mp3?url';
 import bombExplosionSoundUrl from '../../sound/폭탄터짐.mp3?url';
+import timerSoundUrl from '../../sound/타이머.mp3?url';
 
 const MUSIC_VOLUME = 0.27;
 
@@ -18,6 +19,7 @@ export class AudioSystem {
   private readonly dashBurst = new Audio(dashSoundUrl);
   private readonly focusBurst = new Audio(focusSoundUrl);
   private readonly bombExplosion = new Audio(bombExplosionSoundUrl);
+  private readonly timerEnd = new Audio(timerSoundUrl);
   private readonly fadeFrames = new Map<HTMLAudioElement, number>();
   private mediaEnabled = false;
   private paused = true;
@@ -39,6 +41,7 @@ export class AudioSystem {
     this.dashBurst.preload = 'auto';
     this.focusBurst.preload = 'auto';
     this.bombExplosion.preload = 'auto';
+    this.timerEnd.preload = 'auto';
   }
 
   resume(): void {
@@ -171,6 +174,10 @@ export class AudioSystem {
 
   denied(): void {
     this.tone(115, 0.14, 'square', 0.035, 78);
+  }
+
+  runComplete(): void {
+    this.playOneShot(this.timerEnd, 0.9, 1, 0.025, 0.52);
   }
 
   private startMusic(): void {

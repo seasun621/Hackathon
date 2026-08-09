@@ -837,7 +837,7 @@ button:hover { filter: brightness(1.2); transform: translateY(-2px); }
   z-index: 4;
   display: grid;
   justify-items: start;
-  min-width: 310px;
+  min-width: 235px;
   opacity: 0;
   translate: 0 0;
   transform: translate(-50%, 0) rotate(-4deg);
@@ -848,11 +848,11 @@ button:hover { filter: brightness(1.2); transform: translateY(-2px); }
 .toast-badge {
   z-index: 2;
   margin-left: 8px;
-  padding: 4px 28px 3px 12px;
+  padding: 3px 21px 2px 9px;
   color: var(--ink);
   background: var(--gold);
   clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 4px 100%);
-  font: italic 800 20px 'KBL Jump Condensed', sans-serif;
+  font: italic 800 14px 'KBL Jump Condensed', sans-serif;
   letter-spacing: .08em;
   text-shadow: none;
 }
@@ -861,21 +861,22 @@ button:hover { filter: brightness(1.2); transform: translateY(-2px); }
   z-index: 1;
   margin-top: -4px;
   color: #fff;
-  font-size: clamp(58px, 7vw, 100px);
+  font-size: clamp(38px, 4.6vw, 64px);
   line-height: .84;
   letter-spacing: -.03em;
-  -webkit-text-stroke: 2px var(--orange);
-  text-shadow: 5px 6px 0 #81283d, 0 0 28px rgba(255, 211, 78, .82);
+  opacity: .92;
+  -webkit-text-stroke: 1.3px var(--orange);
+  text-shadow: 3px 4px 0 rgba(129, 40, 61, .74), 0 0 18px rgba(255, 211, 78, .62);
 }
 
 .toast-detail {
-  margin: 4px 0 0 52px;
-  padding: 5px 18px 4px 10px;
+  margin: 3px 0 0 34px;
+  padding: 4px 14px 3px 8px;
   color: #eafaff;
   background: rgba(6, 15, 29, .9);
   border-left: 5px solid var(--cyan);
   clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
-  font: italic 800 15px 'KBL Jump Condensed', sans-serif;
+  font: italic 800 11px 'KBL Jump Condensed', sans-serif;
   letter-spacing: .08em;
 }
 
@@ -885,7 +886,7 @@ button:hover { filter: brightness(1.2); transform: translateY(-2px); }
   -webkit-text-stroke-color: #ff244e;
   text-shadow: 5px 6px 0 #641028, 0 0 28px rgba(255, 36, 78, .92);
 }
-.toast.bomb { scale: 1.14; }
+.toast.bomb { scale: 1.04; }
 .toast.show { animation: toast-slam .9s cubic-bezier(.08,.78,.2,1) both; }
 
 .hit-flash {
@@ -975,9 +976,9 @@ button:hover { filter: brightness(1.15) saturate(1.15); transform: translate(2px
 
 @keyframes toast-slam {
   0% { opacity: 0; transform: translate(-50%, 25px) rotate(-9deg) scale(.42); filter: blur(8px); }
-  14% { opacity: 1; transform: translate(-50%, -7px) rotate(-4deg) scale(1.17); filter: blur(0); }
+  14% { opacity: .82; transform: translate(-50%, -5px) rotate(-4deg) scale(1.1); filter: blur(0); }
   28% { transform: translate(-50%, 0) rotate(-4deg) scale(1); }
-  72% { opacity: 1; transform: translate(-50%, -8px) rotate(-4deg) scale(1); }
+  72% { opacity: .78; transform: translate(-50%, -7px) rotate(-4deg) scale(1); }
   100% { opacity: 0; transform: translate(-50%, -42px) rotate(-1deg) scale(1.12); }
 }
 
@@ -995,6 +996,6 @@ button:hover { filter: brightness(1.15) saturate(1.15); transform: translate(2px
   .bottom-hud { grid-template-columns: minmax(230px, 1fr) auto; }
   .meter-stack { width: min(390px, 58vw); }
   .rope-state { display: none; }
-  .toast { min-width: 250px; }
-  .toast-points { font-size: clamp(50px, 11vw, 76px); }
+  .toast { min-width: 205px; }
+  .toast-points { font-size: clamp(36px, 8vw, 56px); }
 }
