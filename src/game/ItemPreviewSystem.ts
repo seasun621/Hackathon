@@ -66,6 +66,15 @@ function createItemModel(definition: ItemDefinition): THREE.Group {
       group.add(mesh(sphere, accent, [0.32, 0.22, 0], [0.8, 0.8, 0.55]));
       group.add(mesh(cone, accent, [0, -0.36, 0], [1.15, 1.25, 0.65], [0, 0, Math.PI]));
       break;
+    case 'siphon':
+      group.add(mesh(sphere, accent, [-0.28, 0.2, 0], [0.72, 0.72, 0.5]));
+      group.add(mesh(sphere, accent, [0.28, 0.2, 0], [0.72, 0.72, 0.5]));
+      group.add(mesh(cone, accent, [0, -0.32, 0], [1.02, 1.15, 0.58], [0, 0, Math.PI]));
+      group.add(mesh(torus, glow, [0, 0.02, 0.16], [1.45, 1.45, 1.45], [Math.PI / 2, 0, 0]));
+      for (const x of [-0.9, 0.9]) {
+        group.add(mesh(cone, light, [x, 0.05, 0], [0.25, 0.68, 0.25], [0, 0, x < 0 ? -1.2 : 1.2]));
+      }
+      break;
     case 'laser':
       group.add(mesh(box, dark, [0, 0, 0], [1.35, 0.5, 0.58]));
       group.add(mesh(cylinder, accent, [0.9, 0, 0], [0.22, 1.25, 0.22], [0, 0, Math.PI / 2]));

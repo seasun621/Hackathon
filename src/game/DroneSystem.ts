@@ -21,6 +21,12 @@ interface EnemyBullet {
   velocity: THREE.Vector3;
   life: number;
   damage: number;
+  sourceId: number;
+}
+
+export interface DronePlayerHit {
+  damage: number;
+  sourceId: number;
 }
 
 interface DroneBurst {
@@ -70,7 +76,7 @@ export class DroneSystem {
   private readonly assaultBulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffe24a });
   private readonly burstGeometry = new THREE.IcosahedronGeometry(1.4, 1);
   private readonly burstRingGeometry = new THREE.TorusGeometry(1.25, 0.12, 6, 28);
-  private readonly pendingPlayerDamage: number[] = [];
+  private readonly pendingPlayerDamage: DronePlayerHit[] = [];
   private nextId = 1;
   private nextFormationIndex = 0;
   private spawnCooldown = 1.8;
@@ -182,7 +188,7 @@ export class DroneSystem {
       bullet.life -= dt;
       bullet.mesh.position.addScaledVector(bullet.velocity, dt);
       if (bullet.mesh.position.distanceToSquared(playerPosition) <= 2.3 * 2.3) {
-        this.pendingPlayerDamage.push(bullet.damage);
+        this.pendingPlayerDamage.push({ damage: bullet.damage, sourceId: bullet.sourceId });
         this.scene.remove(bullet.mesh);
         this.bullets.splice(index, 1);
         continue;
@@ -313,7 +319,7 @@ export class DroneSystem {
     return this.drones.find((drone) => drone.id === targetId)?.group.position.clone() ?? null;
   }
 
-  consumePlayerDamage(): number | null {
+  consumePlayerDamage(): DronePlayerHit | null {
     return this.pendingPlayerDamage.shift() ?? null;
   }
 
@@ -469,6 +475,7 @@ export class DroneSystem {
       velocity,
       life: 4.8,
       damage: (CONFIG.droneBulletDamage + stage * 1.4) * (drone.kind === 'assault' ? 1.75 : 1),
+      sourceId: drone.id,
     });
     this.onShoot(drone.kind);
   }

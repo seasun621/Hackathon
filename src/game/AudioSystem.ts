@@ -5,7 +5,6 @@ import musicUrl from '../../sound/브금임시.mp3?url';
 import windSoundUrl from '../../sound/활공 바람.mp3?url';
 import bombExplosionSoundUrl from '../../sound/폭탄터짐.mp3?url';
 import jumpSoundUrl from '../../sound/효과음점프.mp3?url';
-import machinegunSoundUrl from '../../sound/기관총.mp3?url';
 import laserSoundUrl from '../../sound/레이저건.mp3?url';
 import droneHitSoundUrl from '../../sound/드론 맞는소리.mp3?url';
 import droneShootSoundUrl from '../../sound/드론 총소리.mp3?url';
@@ -23,7 +22,6 @@ export class AudioSystem {
   private readonly dashBurst = new Audio(dashSoundUrl);
   private readonly bombExplosion = new Audio(bombExplosionSoundUrl);
   private readonly jumpBurst = new Audio(jumpSoundUrl);
-  private readonly machinegunBurst = new Audio(machinegunSoundUrl);
   private readonly laserBurst = new Audio(laserSoundUrl);
   private readonly droneHitBurst = new Audio(droneHitSoundUrl);
   private readonly droneShootBurst = new Audio(droneShootSoundUrl);
@@ -31,6 +29,7 @@ export class AudioSystem {
   private readonly fadeFrames = new Map<HTMLAudioElement, number>();
   private mediaEnabled = false;
   private paused = true;
+  private intermission = false;
   private ropeRideRequested = false;
   private windRequested = false;
   private musicPlayPending = false;
@@ -50,7 +49,6 @@ export class AudioSystem {
     this.dashBurst.preload = 'auto';
     this.bombExplosion.preload = 'auto';
     this.jumpBurst.preload = 'auto';
-    this.machinegunBurst.preload = 'auto';
     this.laserBurst.preload = 'auto';
     this.droneHitBurst.preload = 'auto';
     this.droneShootBurst.preload = 'auto';
@@ -82,6 +80,17 @@ export class AudioSystem {
     }
     if (!this.mediaEnabled) return;
     this.startMusic();
+  }
+
+  setIntermission(active: boolean): void {
+    this.intermission = active;
+    if (!this.mediaEnabled || this.paused) return;
+    this.startMusic();
+    this.fadeElement(this.music, active ? MUSIC_VOLUME * 0.42 : MUSIC_VOLUME, active ? 360 : 480);
+    if (active) {
+      this.fadeAndStopLoop(this.ropeRide, 'rope');
+      this.fadeAndStopLoop(this.wind, 'wind');
+    }
   }
 
   setMotionState(
@@ -122,10 +131,6 @@ export class AudioSystem {
   }
 
   shoot(weaponId: string): void {
-    if (weaponId === 'machinegun') {
-      this.playOneShot(this.machinegunBurst, 0.62, 0.98 + Math.random() * 0.05, 0.008, 0.08);
-      return;
-    }
     if (weaponId === 'laser') {
       this.playOneShot(this.laserBurst, 0.58, 0.98 + Math.random() * 0.04, 0.006, 0.08);
       return;
@@ -205,12 +210,18 @@ export class AudioSystem {
     this.playOneShot(this.playerHitBurst, 0.78, 0.98, 0.008, 0.18);
   }
 
+  land(power = 1): void {
+    const amount = Math.min(1, Math.max(0.2, power));
+    this.tone(92, 0.11 + amount * 0.08, 'triangle', 0.025 + amount * 0.026, 48);
+    this.noise(0.08 + amount * 0.08, 0.018 + amount * 0.024, 520);
+  }
+
   denied(): void {
     this.tone(115, 0.14, 'square', 0.035, 78);
   }
 
   private startMusic(): void {
-    const target = MUSIC_VOLUME;
+    const target = this.intermission ? MUSIC_VOLUME * 0.42 : MUSIC_VOLUME;
     if (!this.music.paused) {
       this.fadeElement(this.music, target, 560);
       return;
