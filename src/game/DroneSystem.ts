@@ -17,12 +17,16 @@ interface Drone {
 }
 
 interface EnemyBullet {
-  mesh: THREE.Mesh;
+  kind: 'scout' | 'assault';
+  position: THREE.Vector3;
   velocity: THREE.Vector3;
+  quaternion: THREE.Quaternion;
   life: number;
   damage: number;
   sourceId: number;
 }
+
+const ENEMY_BULLET_INSTANCE_CAPACITY = 160;
 
 export interface DronePlayerHit {
   damage: number;
@@ -62,6 +66,7 @@ export interface DroneDamageResult {
 export class DroneSystem {
   private readonly drones: Drone[] = [];
   private readonly bullets: EnemyBullet[] = [];
+  private readonly bulletPool: EnemyBullet[] = [];
   private readonly bursts: DroneBurst[] = [];
   private readonly raycaster = new THREE.Raycaster();
   private readonly wallIntersections: THREE.Intersection[] = [];
@@ -74,8 +79,55 @@ export class DroneSystem {
   private readonly bulletGeometry = new THREE.BoxGeometry(0.34, 0.34, 1.9);
   private readonly scoutBulletMaterial = new THREE.MeshBasicMaterial({ color: 0xcaff35 });
   private readonly assaultBulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffe24a });
+  private readonly scoutBulletInstances = new THREE.InstancedMesh(
+    this.bulletGeometry,
+    this.scoutBulletMaterial,
+    ENEMY_BULLET_INSTANCE_CAPACITY,
+  );
+  private readonly assaultBulletInstances = new THREE.InstancedMesh(
+    this.bulletGeometry,
+    this.assaultBulletMaterial,
+    ENEMY_BULLET_INSTANCE_CAPACITY,
+  );
+  private readonly bulletTransform = new THREE.Object3D();
+  private readonly bulletForwardAxis = new THREE.Vector3(0, 0, 1);
   private readonly burstGeometry = new THREE.IcosahedronGeometry(1.4, 1);
   private readonly burstRingGeometry = new THREE.TorusGeometry(1.25, 0.12, 6, 28);
+  // Every drone keeps its full mesh hierarchy and transforms, but immutable
+  // render assets are shared so replacement drones do not allocate new GPU buffers.
+  private readonly droneCoreGeometry = new THREE.DodecahedronGeometry(1.7, 0);
+  private readonly droneFaceGeometry = new THREE.BoxGeometry(1.72, 0.6, 0.32);
+  private readonly droneEyeGeometry = new THREE.BoxGeometry(1.04, 0.18, 0.1);
+  private readonly droneCrownGeometry = new THREE.BoxGeometry(0.38, 0.86, 0.82);
+  private readonly droneArmGeometry = new THREE.BoxGeometry(2.1, 0.3, 0.46);
+  private readonly droneSignalGeometry = new THREE.BoxGeometry(0.64, 0.09, 0.56);
+  private readonly droneRotorGeometry = new THREE.TorusGeometry(0.9, 0.12, 6, 18);
+  private readonly droneGunGeometry = new THREE.BoxGeometry(0.34, 0.34, 1.48);
+  private readonly droneMuzzleGeometry = new THREE.BoxGeometry(0.46, 0.46, 0.2);
+  private readonly assaultArmorRingGeometry = new THREE.TorusGeometry(1.78, 0.22, 7, 22);
+  private readonly assaultShoulderGeometry = new THREE.BoxGeometry(0.78, 0.72, 1.34);
+  private readonly droneDarkMaterial = new THREE.MeshStandardMaterial({
+    color: 0x071722,
+    roughness: 0.28,
+    metalness: 0.82,
+    emissive: 0x07131b,
+    emissiveIntensity: 0.55,
+  });
+  private readonly scoutArmorMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffdf36,
+    roughness: 0.34,
+    metalness: 0.46,
+    emissive: 0x5a3c00,
+    emissiveIntensity: 0.52,
+  });
+  private readonly assaultArmorMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffb61f,
+    roughness: 0.34,
+    metalness: 0.46,
+    emissive: 0x5a3c00,
+    emissiveIntensity: 0.72,
+  });
+  private readonly droneNeonMaterial = new THREE.MeshBasicMaterial({ color: 0xb6ff35 });
   private readonly pendingPlayerDamage: DronePlayerHit[] = [];
   private nextId = 1;
   private nextFormationIndex = 0;
@@ -84,11 +136,19 @@ export class DroneSystem {
   constructor(
     private readonly scene: THREE.Scene,
     private readonly onShoot: (kind: 'scout' | 'assault') => void = () => undefined,
-  ) {}
+  ) {
+    for (const instances of [this.scoutBulletInstances, this.assaultBulletInstances]) {
+      instances.count = 0;
+      instances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      instances.frustumCulled = false;
+      instances.renderOrder = 4;
+      this.scene.add(instances);
+    }
+  }
 
   reset(): void {
-    for (const drone of this.drones) this.scene.remove(drone.group);
-    for (const bullet of this.bullets) this.scene.remove(bullet.mesh);
+    for (let index = this.drones.length - 1; index >= 0; index -= 1) this.removeDroneAt(index);
+    for (let index = this.bullets.length - 1; index >= 0; index -= 1) this.releaseBulletAt(index);
     for (const burst of this.bursts) {
       this.scene.remove(burst.mesh, burst.ring, burst.sparks);
       burst.mesh.material.dispose();
@@ -96,8 +156,7 @@ export class DroneSystem {
       burst.sparks.geometry.dispose();
       burst.sparks.material.dispose();
     }
-    this.drones.length = 0;
-    this.bullets.length = 0;
+    this.syncBulletInstances();
     this.bursts.length = 0;
     this.pendingPlayerDamage.length = 0;
     this.spawnCooldown = 1.8;
@@ -110,12 +169,22 @@ export class DroneSystem {
     assaults: number;
     bullets: number;
     bursts: number;
+    modelGeometries: number;
+    modelMaterials: number;
   } {
     let scouts = 0;
     let assaults = 0;
+    const modelGeometries = new Set<string>();
+    const modelMaterials = new Set<string>();
     for (const drone of this.drones) {
       if (drone.kind === 'assault') assaults += 1;
       else scouts += 1;
+      drone.group.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        modelGeometries.add(object.geometry.uuid);
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) modelMaterials.add(material.uuid);
+      });
     }
     return {
       drones: this.drones.length,
@@ -123,6 +192,8 @@ export class DroneSystem {
       assaults,
       bullets: this.bullets.length,
       bursts: this.bursts.length,
+      modelGeometries: modelGeometries.size,
+      modelMaterials: modelMaterials.size,
     };
   }
 
@@ -163,8 +234,7 @@ export class DroneSystem {
       this.direction.copy(playerPosition).sub(drone.group.position);
       const distance = this.direction.length();
       if (distance > 230) {
-        this.scene.remove(drone.group);
-        this.drones.splice(index, 1);
+        this.removeDroneAt(index);
         continue;
       }
       if (distance > 0.001 && distance < CONFIG.droneDetectionRange) {
@@ -208,18 +278,17 @@ export class DroneSystem {
     for (let index = this.bullets.length - 1; index >= 0; index -= 1) {
       const bullet = this.bullets[index];
       bullet.life -= dt;
-      bullet.mesh.position.addScaledVector(bullet.velocity, dt);
-      if (bullet.mesh.position.distanceToSquared(playerPosition) <= 2.3 * 2.3) {
+      bullet.position.addScaledVector(bullet.velocity, dt);
+      if (bullet.position.distanceToSquared(playerPosition) <= 2.3 * 2.3) {
         this.pendingPlayerDamage.push({ damage: bullet.damage, sourceId: bullet.sourceId });
-        this.scene.remove(bullet.mesh);
-        this.bullets.splice(index, 1);
+        this.releaseBulletAt(index);
         continue;
       }
-      if (bullet.life <= 0 || bullet.mesh.position.distanceToSquared(playerPosition) > 240 * 240) {
-        this.scene.remove(bullet.mesh);
-        this.bullets.splice(index, 1);
+      if (bullet.life <= 0 || bullet.position.distanceToSquared(playerPosition) > 240 * 240) {
+        this.releaseBulletAt(index);
       }
     }
+    this.syncBulletInstances();
 
     for (let index = this.bursts.length - 1; index >= 0; index -= 1) {
       const burst = this.bursts[index];
@@ -361,8 +430,7 @@ export class DroneSystem {
     };
     if (destroyed) {
       this.createBurst(position);
-      this.scene.remove(drone.group);
-      this.drones.splice(index, 1);
+      this.removeDroneAt(index);
     }
     return result;
   }
@@ -411,61 +479,46 @@ export class DroneSystem {
 
   private createDroneModel(kind: 'scout' | 'assault'): { group: THREE.Group; rotorLeft: THREE.Mesh; rotorRight: THREE.Mesh } {
     const group = new THREE.Group();
-    const dark = new THREE.MeshStandardMaterial({
-      color: 0x071722,
-      roughness: 0.28,
-      metalness: 0.82,
-      emissive: 0x07131b,
-      emissiveIntensity: 0.55,
-    });
-    const armor = new THREE.MeshStandardMaterial({
-      color: kind === 'assault' ? 0xffb61f : 0xffdf36,
-      roughness: 0.34,
-      metalness: 0.46,
-      emissive: 0x5a3c00,
-      emissiveIntensity: kind === 'assault' ? 0.72 : 0.52,
-    });
-    const neon = new THREE.MeshBasicMaterial({ color: 0xb6ff35 });
-    const core = new THREE.Mesh(new THREE.DodecahedronGeometry(1.7, 0), dark);
+    const armor = kind === 'assault' ? this.assaultArmorMaterial : this.scoutArmorMaterial;
+    const core = new THREE.Mesh(this.droneCoreGeometry, this.droneDarkMaterial);
     core.scale.set(1.3, 0.72, 1);
     group.add(core);
-    const face = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.6, 0.32), armor);
+    const face = new THREE.Mesh(this.droneFaceGeometry, armor);
     face.position.z = 1.3;
     group.add(face);
-    const eye = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.18, 0.1), neon);
+    const eye = new THREE.Mesh(this.droneEyeGeometry, this.droneNeonMaterial);
     eye.position.set(0, 0.03, 1.49);
     group.add(eye);
-    const crown = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.86, 0.82), armor);
+    const crown = new THREE.Mesh(this.droneCrownGeometry, armor);
     crown.position.set(0, 1.15, -0.18);
     crown.rotation.z = Math.PI * 0.25;
     group.add(crown);
     for (const x of [-2.25, 2.25]) {
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.3, 0.46), armor);
+      const arm = new THREE.Mesh(this.droneArmGeometry, armor);
       arm.position.x = x * 0.48;
       group.add(arm);
-      const signal = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.09, 0.56), neon);
+      const signal = new THREE.Mesh(this.droneSignalGeometry, this.droneNeonMaterial);
       signal.position.set(x * 0.72, 0.2, 0.02);
       group.add(signal);
     }
-    const rotorGeometry = new THREE.TorusGeometry(0.9, 0.12, 6, 18);
-    const rotorLeft = new THREE.Mesh(rotorGeometry, neon);
+    const rotorLeft = new THREE.Mesh(this.droneRotorGeometry, this.droneNeonMaterial);
     rotorLeft.rotation.x = Math.PI / 2;
     rotorLeft.position.x = -2.15;
     const rotorRight = rotorLeft.clone();
     rotorRight.position.x = 2.15;
     group.add(rotorLeft, rotorRight);
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 1.48), dark);
+    const gun = new THREE.Mesh(this.droneGunGeometry, this.droneDarkMaterial);
     gun.position.set(0, -0.7, 1.18);
     group.add(gun);
-    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.46, 0.2), neon);
+    const muzzle = new THREE.Mesh(this.droneMuzzleGeometry, this.droneNeonMaterial);
     muzzle.position.set(0, -0.7, 1.88);
     group.add(muzzle);
     if (kind === 'assault') {
-      const armorRing = new THREE.Mesh(new THREE.TorusGeometry(1.78, 0.22, 7, 22), armor);
+      const armorRing = new THREE.Mesh(this.assaultArmorRingGeometry, armor);
       armorRing.rotation.x = Math.PI / 2;
       group.add(armorRing);
       for (const x of [-1.35, 1.35]) {
-        const shoulder = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.72, 1.34), armor);
+        const shoulder = new THREE.Mesh(this.assaultShoulderGeometry, armor);
         shoulder.position.set(x, 0.08, 0.28);
         group.add(shoulder);
         const cannon = gun.clone();
@@ -480,26 +533,72 @@ export class DroneSystem {
     return { group, rotorLeft, rotorRight };
   }
 
+  private removeDroneAt(index: number): void {
+    const drone = this.drones[index];
+    if (!drone) return;
+    this.scene.remove(drone.group);
+    this.drones.splice(index, 1);
+    // Mesh instances are per drone and can be collected immediately. Their
+    // geometry/material references point to the shared assets above and stay valid.
+    drone.group.clear();
+  }
+
   private fireAtPlayer(drone: Drone, playerPosition: THREE.Vector3, stage: number): void {
-    const bullet = new THREE.Mesh(
-      this.bulletGeometry,
-      drone.kind === 'assault' ? this.assaultBulletMaterial : this.scoutBulletMaterial,
-    );
-    if (drone.kind === 'assault') bullet.scale.set(1.55, 1.55, 1.28);
+    if (this.bullets.length >= ENEMY_BULLET_INSTANCE_CAPACITY) this.releaseBulletAt(0);
+    const bullet = this.bulletPool.pop() ?? {
+      kind: drone.kind,
+      position: new THREE.Vector3(),
+      velocity: new THREE.Vector3(),
+      quaternion: new THREE.Quaternion(),
+      life: 0,
+      damage: 0,
+      sourceId: 0,
+    };
     this.direction.copy(playerPosition).sub(drone.group.position).normalize();
+    bullet.kind = drone.kind;
     bullet.position.copy(drone.group.position).addScaledVector(this.direction, 2.8);
-    bullet.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), this.direction);
-    bullet.renderOrder = 4;
-    const velocity = this.direction.multiplyScalar(CONFIG.droneBulletSpeed + stage * 1.2).clone();
-    this.scene.add(bullet);
-    this.bullets.push({
-      mesh: bullet,
-      velocity,
-      life: 4.8,
-      damage: (CONFIG.droneBulletDamage + stage * 1.4) * (drone.kind === 'assault' ? 1.75 : 1),
-      sourceId: drone.id,
-    });
+    bullet.quaternion.setFromUnitVectors(this.bulletForwardAxis, this.direction);
+    bullet.velocity.copy(this.direction).multiplyScalar(CONFIG.droneBulletSpeed + stage * 1.2);
+    bullet.life = 4.8;
+    bullet.damage = (CONFIG.droneBulletDamage + stage * 1.4) * (drone.kind === 'assault' ? 1.75 : 1);
+    bullet.sourceId = drone.id;
+    this.bullets.push(bullet);
     this.onShoot(drone.kind);
+  }
+
+  private releaseBulletAt(index: number): void {
+    const bullet = this.bullets[index];
+    if (!bullet) return;
+    const last = this.bullets.pop();
+    if (last && last !== bullet) this.bullets[index] = last;
+    this.bulletPool.push(bullet);
+  }
+
+  private syncBulletInstances(): void {
+    let scoutCount = 0;
+    let assaultCount = 0;
+    for (const bullet of this.bullets) {
+      const assault = bullet.kind === 'assault';
+      this.bulletTransform.position.copy(bullet.position);
+      this.bulletTransform.quaternion.copy(bullet.quaternion);
+      this.bulletTransform.scale.set(
+        assault ? 1.55 : 1,
+        assault ? 1.55 : 1,
+        assault ? 1.28 : 1,
+      );
+      this.bulletTransform.updateMatrix();
+      if (assault) {
+        this.assaultBulletInstances.setMatrixAt(assaultCount, this.bulletTransform.matrix);
+        assaultCount += 1;
+      } else {
+        this.scoutBulletInstances.setMatrixAt(scoutCount, this.bulletTransform.matrix);
+        scoutCount += 1;
+      }
+    }
+    this.scoutBulletInstances.count = scoutCount;
+    this.assaultBulletInstances.count = assaultCount;
+    this.scoutBulletInstances.instanceMatrix.needsUpdate = true;
+    this.assaultBulletInstances.instanceMatrix.needsUpdate = true;
   }
 
   private hasClearShot(

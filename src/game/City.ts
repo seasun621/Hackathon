@@ -50,6 +50,11 @@ interface PendingChunk {
   key: string;
 }
 
+interface ActiveChunkBuild {
+  pending: PendingChunk;
+  steps: Generator<void, void, void>;
+}
+
 export interface LoadedCityChunk {
   x: number;
   z: number;
@@ -160,6 +165,7 @@ export class City {
   private readonly wantedChunks = new Set<string>();
   private readonly pendingChunks: PendingChunk[] = [];
   private readonly pendingKeys = new Set<string>();
+  private activeChunkBuild: ActiveChunkBuild | null = null;
   private readonly loadedChunkEvents: LoadedCityChunk[] = [];
   private readonly buildingGeometry = new THREE.BoxGeometry(1, 1, 1);
   private readonly antennaGeometry = new THREE.CylinderGeometry(0.7, 1, 1, 6);
@@ -383,17 +389,10 @@ export class City {
       });
     }
 
-    // Build the immediate play area first instead of compiling every visible
-    // chunk during the first browser frame. Remaining chunks stream in safely.
-    const creationBudget = firstUpdate ? Math.min(9, this.pendingChunks.length) : 1;
-    for (let index = 0; index < creationBudget; index += 1) {
-      const pending = this.pendingChunks.shift();
-      if (!pending) break;
-      this.pendingKeys.delete(pending.key);
-      if (this.wantedChunks.has(pending.key) && !this.chunks.has(pending.key)) {
-        this.createChunk(pending.x, pending.z, pending.key);
-      }
-    }
+    // A chunk contains many procedural buildings, colliders, facade instances,
+    // and traffic data. Advance a generator within a small time budget instead
+    // of completing all of that work in one frame.
+    this.processChunkBuildQueue(firstUpdate ? 8.5 : 2.4);
 
     for (const [key, chunk] of this.chunks) {
       const detailDistance = Math.hypot(
@@ -442,11 +441,50 @@ export class City {
     return this.nearbyBuildingMeshes;
   }
 
-  getPerformanceStats(): { chunks: number; physicsBodies: number; raycastMeshes: number } {
+  private processChunkBuildQueue(timeBudgetMs: number): void {
+    const startedAt = performance.now();
+    let advancedSteps = 0;
+    while (performance.now() - startedAt < timeBudgetMs && advancedSteps < 12) {
+      if (!this.activeChunkBuild) {
+        let pending = this.pendingChunks.shift();
+        while (pending && (!this.wantedChunks.has(pending.key) || this.chunks.has(pending.key))) {
+          this.pendingKeys.delete(pending.key);
+          pending = this.pendingChunks.shift();
+        }
+        if (!pending) return;
+        this.activeChunkBuild = {
+          pending,
+          steps: this.createChunkSteps(pending.x, pending.z, pending.key),
+        };
+      }
+
+      const active = this.activeChunkBuild;
+      const result = active.steps.next();
+      advancedSteps += 1;
+      if (!result.done) continue;
+
+      this.pendingKeys.delete(active.pending.key);
+      this.activeChunkBuild = null;
+      const completed = this.chunks.get(active.pending.key);
+      if (completed && !this.wantedChunks.has(active.pending.key)) {
+        this.removeChunk(active.pending.key, completed);
+      }
+    }
+  }
+
+  getPerformanceStats(): {
+    chunks: number;
+    physicsBodies: number;
+    raycastMeshes: number;
+    buildQueue: number;
+    buildActive: boolean;
+  } {
     return {
       chunks: this.chunks.size,
       physicsBodies: this.activePhysicsBodies,
       raycastMeshes: this.nearbyBuildingMeshes.length,
+      buildQueue: this.pendingChunks.length + (this.activeChunkBuild ? 1 : 0),
+      buildActive: this.activeChunkBuild !== null,
     };
   }
 
@@ -487,7 +525,7 @@ export class City {
     return best?.clone() ?? null;
   }
 
-  private createChunk(chunkX: number, chunkZ: number, key: string): void {
+  private *createChunkSteps(chunkX: number, chunkZ: number, key: string): Generator<void, void, void> {
     const random = seededRandom(chunkSeed(chunkX, chunkZ));
     const plan = createChunkUrbanPlan(chunkX, chunkZ);
     const group = new THREE.Group();
@@ -865,6 +903,9 @@ export class City {
     }
 
     for (const parcel of parcels) {
+        // Each parcel is a self-contained slice of work: building instances,
+        // facade layout, collider creation, and traversal anchors.
+        yield;
         const { localX, localZ, spanX, spanZ, streetAxis, quadrantIndex } = parcel;
         if (diagonalDistrict && Math.sign(localX) === Math.sign(localZ)) continue;
         const riverOverlap = plan.river
@@ -1555,6 +1596,7 @@ export class City {
         const body = this.world.createRigidBody(preciseColliderParts
           ? RAPIER.RigidBodyDesc.fixed()
           : RAPIER.RigidBodyDesc.fixed().setTranslation(x, height / 2, z));
+        body.setEnabled(false);
         if (preciseColliderParts) {
           for (const part of preciseColliderParts) {
             this.world.createCollider(
@@ -1610,6 +1652,8 @@ export class City {
         }
     }
 
+    yield;
+
     // The validator is intentionally advisory: it improves city generation
     // without changing selection, rope forces, or any other gameplay system.
     group.userData.anchorCoverageValid = validateAnchorCoverage(anchors);
@@ -1643,6 +1687,8 @@ export class City {
       ? { mesh: cars, centerX, centerZ, cars: trafficCars }
       : null;
     if (traffic) this.updateTraffic(traffic, performance.now() * 0.001);
+
+    yield;
 
     buildings.userData.isBuilding = true;
     tiers.userData.isBuilding = true;
@@ -1759,7 +1805,7 @@ export class City {
       centerZ,
       traffic,
       detailMeshes,
-      physicsEnabled: true,
+      physicsEnabled: false,
     });
     this.loadedChunkEvents.push({ x: chunkX, z: chunkZ });
   }

@@ -12,28 +12,49 @@ import playerHitSoundUrl from '../../sound/드론한테맞음.mp3?url';
 
 const MUSIC_VOLUME = 0.27;
 
+type OneShotKey =
+  | 'ropeAttach'
+  | 'dash'
+  | 'bomb'
+  | 'jump'
+  | 'laser'
+  | 'droneHit'
+  | 'droneShoot'
+  | 'playerHit';
+
+interface OneShotVoice {
+  audio: HTMLAudioElement;
+  active: boolean;
+  startedAt: number;
+  priority: number;
+}
+
+interface OneShotPool {
+  voices: OneShotVoice[];
+  cooldownMs: number;
+  lastPlayedAt: number;
+  priority: number;
+}
+
+const PRIORITY_PREEMPT_WINDOW_MS = 90;
+
 export class AudioSystem {
   private context: AudioContext | null = null;
   private noiseBuffer: AudioBuffer | null = null;
   private readonly music = new Audio(musicUrl);
   private readonly ropeRide = new Audio(ropeRideSoundUrl);
   private readonly wind = new Audio(windSoundUrl);
-  private readonly ropeAttach = new Audio(ropeAttachSoundUrl);
-  private readonly dashBurst = new Audio(dashSoundUrl);
-  private readonly bombExplosion = new Audio(bombExplosionSoundUrl);
-  private readonly jumpBurst = new Audio(jumpSoundUrl);
-  private readonly laserBurst = new Audio(laserSoundUrl);
-  private readonly droneHitBurst = new Audio(droneHitSoundUrl);
-  private readonly droneShootBurst = new Audio(droneShootSoundUrl);
-  private readonly playerHitBurst = new Audio(playerHitSoundUrl);
   private readonly fadeFrames = new Map<HTMLAudioElement, number>();
-  private readonly activeOneShots = new Set<HTMLAudioElement>();
+  private readonly oneShotPools = new Map<OneShotKey, OneShotPool>();
+  private readonly lastSyntheticEffectAt = new Map<string, number>();
   private mediaEnabled = false;
   private paused = true;
   private intermission = false;
   private ropeRideRequested = false;
   private windRequested = false;
   private musicPlayPending = false;
+  private suppressedOneShots = 0;
+  private recycledOneShots = 0;
 
   constructor() {
     this.music.loop = true;
@@ -46,14 +67,14 @@ export class AudioSystem {
     this.wind.loop = true;
     this.wind.preload = 'auto';
     this.wind.volume = 0;
-    this.ropeAttach.preload = 'auto';
-    this.dashBurst.preload = 'auto';
-    this.bombExplosion.preload = 'auto';
-    this.jumpBurst.preload = 'auto';
-    this.laserBurst.preload = 'auto';
-    this.droneHitBurst.preload = 'auto';
-    this.droneShootBurst.preload = 'auto';
-    this.playerHitBurst.preload = 'auto';
+    this.createOneShotPool('ropeAttach', ropeAttachSoundUrl, 3, 80, 2);
+    this.createOneShotPool('dash', dashSoundUrl, 2, 120, 3);
+    this.createOneShotPool('bomb', bombExplosionSoundUrl, 3, 90, 7);
+    this.createOneShotPool('jump', jumpSoundUrl, 2, 120, 3);
+    this.createOneShotPool('laser', laserSoundUrl, 3, 55, 2);
+    this.createOneShotPool('droneHit', droneHitSoundUrl, 3, 55, 6);
+    this.createOneShotPool('droneShoot', droneShootSoundUrl, 4, 70, 1);
+    this.createOneShotPool('playerHit', playerHitSoundUrl, 2, 90, 7);
   }
 
   resume(): void {
@@ -72,6 +93,7 @@ export class AudioSystem {
   setPaused(paused: boolean): void {
     this.paused = paused;
     if (paused) {
+      this.stopOneShots();
       this.fadeElement(this.music, 0, 320, () => {
         if (this.paused) this.music.pause();
       });
@@ -83,11 +105,27 @@ export class AudioSystem {
     this.startMusic();
   }
 
-  getPerformanceStats(): { oneShots: number; loops: number; contextState: string } {
+  getPerformanceStats(): {
+    oneShots: number;
+    pooledVoices: number;
+    suppressedOneShots: number;
+    recycledOneShots: number;
+    loops: number;
+    contextState: string;
+  } {
     const loops = [this.music, this.ropeRide, this.wind]
       .reduce((count, audio) => count + (audio.paused ? 0 : 1), 0);
+    let oneShots = 0;
+    let pooledVoices = 0;
+    for (const pool of this.oneShotPools.values()) {
+      pooledVoices += pool.voices.length;
+      oneShots += pool.voices.reduce((count, voice) => count + (voice.active ? 1 : 0), 0);
+    }
     return {
-      oneShots: this.activeOneShots.size,
+      oneShots,
+      pooledVoices,
+      suppressedOneShots: this.suppressedOneShots,
+      recycledOneShots: this.recycledOneShots,
       loops,
       contextState: this.context?.state ?? 'none',
     };
@@ -143,7 +181,7 @@ export class AudioSystem {
 
   shoot(weaponId: string): void {
     if (weaponId === 'laser') {
-      this.playOneShot(this.laserBurst, 0.58, 0.98 + Math.random() * 0.04, 0.006, 0.08);
+      this.playOneShot('laser', 0.58, 0.98 + Math.random() * 0.04);
       return;
     }
     this.tone(115, 0.075, 'square', 0.075, 48);
@@ -151,7 +189,7 @@ export class AudioSystem {
   }
 
   attach(): void {
-    this.playOneShot(this.ropeAttach, 0.72, 1, 0.055, 0.42);
+    if (!this.playOneShot('ropeAttach', 0.72, 1)) return;
     this.tone(290, 0.09, 'sine', 0.032, 760);
   }
 
@@ -160,25 +198,27 @@ export class AudioSystem {
   }
 
   hit(): void {
+    if (!this.allowSyntheticEffect('hit', 55)) return;
     this.tone(680, 0.09, 'sine', 0.06, 1180);
     window.setTimeout(() => this.tone(920, 0.075, 'sine', 0.035, 1350), 34);
     this.noise(0.12, 0.035, 1250);
   }
 
   gold(): void {
+    if (!this.allowSyntheticEffect('gold', 80)) return;
     this.tone(740, 0.12, 'triangle', 0.065, 1260);
     window.setTimeout(() => this.tone(1120, 0.15, 'sine', 0.045, 1680), 50);
     this.noise(0.2, 0.06, 1700);
   }
 
   bomb(): void {
-    this.playOneShot(this.bombExplosion, 0.92, 0.88, 0.018, 0.42);
+    if (!this.playOneShot('bomb', 0.92, 0.88)) return;
     this.tone(92, 0.28, 'sawtooth', 0.09, 34);
     this.noise(0.34, 0.1, 420);
   }
 
   defuse(): void {
-    this.playOneShot(this.bombExplosion, 0.96, 1.02, 0.018, 0.38);
+    if (!this.playOneShot('bomb', 0.96, 1.02)) return;
     this.tone(520, 0.11, 'square', 0.06, 980);
     window.setTimeout(() => this.tone(880, 0.14, 'triangle', 0.055, 1480), 45);
     this.noise(0.18, 0.055, 1450);
@@ -190,7 +230,7 @@ export class AudioSystem {
 
   dash(power = 1): void {
     const duration = 0.34 + power * 0.22;
-    this.playOneShot(this.dashBurst, 0.56 + power * 0.28, 0.94 + power * 0.1, 0.045, 0.34);
+    if (!this.playOneShot('dash', 0.56 + power * 0.28, 0.94 + power * 0.1)) return;
     this.tone(125, duration, 'sawtooth', 0.045 + power * 0.025, 1050);
     this.tone(58, duration * 0.86, 'triangle', 0.03 + power * 0.018, 280);
     this.noise(duration, 0.045 + power * 0.03, 2400);
@@ -198,27 +238,25 @@ export class AudioSystem {
 
   jumpBoost(power = 1): void {
     const duration = 0.32 + power * 0.2;
-    this.playOneShot(this.jumpBurst, 0.62 + power * 0.3, 0.94 + power * 0.08, 0.018, 0.24);
+    if (!this.playOneShot('jump', 0.62 + power * 0.3, 0.94 + power * 0.08)) return;
     this.tone(78, duration, 'sawtooth', 0.035 + power * 0.025, 1280);
     this.noise(duration, 0.035 + power * 0.025, 2100);
   }
 
   droneShoot(kind: 'scout' | 'assault'): void {
     this.playOneShot(
-      this.droneShootBurst,
+      'droneShoot',
       kind === 'assault' ? 0.64 : 0.5,
       (kind === 'assault' ? 0.82 : 1.04) + Math.random() * 0.05,
-      0.006,
-      0.1,
     );
   }
 
   droneHit(): void {
-    this.playOneShot(this.droneHitBurst, 0.64, 0.95 + Math.random() * 0.1, 0.008, 0.13);
+    this.playOneShot('droneHit', 0.64, 0.95 + Math.random() * 0.1);
   }
 
   playerHit(): void {
-    this.playOneShot(this.playerHitBurst, 0.78, 0.98, 0.008, 0.18);
+    this.playOneShot('playerHit', 0.78, 0.98);
   }
 
   land(power = 1): void {
@@ -325,38 +363,101 @@ export class AudioSystem {
     this.fadeFrames.set(audio, requestAnimationFrame(tick));
   }
 
-  private playOneShot(
-    template: HTMLAudioElement,
-    volume: number,
-    playbackRate: number,
-    fadeInSeconds = 0.045,
-    fadeOutSeconds = 0.22,
+  private createOneShotPool(
+    key: OneShotKey,
+    sourceUrl: string,
+    size: number,
+    cooldownMs: number,
+    priority: number,
   ): void {
-    if (!this.mediaEnabled || this.paused) return;
-    const voice = template.cloneNode(true) as HTMLAudioElement;
-    const releaseVoice = (): void => {
-      this.activeOneShots.delete(voice);
-    };
-    this.activeOneShots.add(voice);
-    voice.addEventListener('ended', releaseVoice, { once: true });
-    voice.addEventListener('error', releaseVoice, { once: true });
-    const peakVolume = Math.min(1, Math.max(0, volume));
-    voice.volume = 0;
-    voice.playbackRate = playbackRate;
-    const updateEnvelope = (): void => {
-      if (voice.paused || voice.ended) return;
-      const fadeIn = Math.min(1, voice.currentTime / Math.max(0.001, fadeInSeconds));
-      const remaining = Number.isFinite(voice.duration)
-        ? Math.max(0, voice.duration - voice.currentTime)
-        : fadeOutSeconds;
-      const fadeOut = Math.min(1, remaining / Math.max(0.001, fadeOutSeconds));
-      voice.volume = peakVolume * Math.min(fadeIn, fadeOut);
-      requestAnimationFrame(updateEnvelope);
-    };
-    void voice.play().then(() => requestAnimationFrame(updateEnvelope)).catch(() => {
-      releaseVoice();
+    const voices = Array.from({ length: size }, () => {
+      const audio = new Audio(sourceUrl);
+      const voice: OneShotVoice = { audio, active: false, startedAt: 0, priority };
+      audio.preload = 'auto';
+      audio.addEventListener('ended', () => {
+        voice.active = false;
+      });
+      audio.addEventListener('error', () => {
+        voice.active = false;
+      });
+      audio.load();
+      return voice;
+    });
+    this.oneShotPools.set(key, {
+      voices,
+      cooldownMs,
+      lastPlayedAt: Number.NEGATIVE_INFINITY,
+      priority,
+    });
+  }
+
+  private stopOneShots(): void {
+    for (const pool of this.oneShotPools.values()) {
+      for (const voice of pool.voices) {
+        if (!voice.active) continue;
+        voice.audio.pause();
+        voice.audio.currentTime = 0;
+        voice.active = false;
+      }
+    }
+  }
+
+  private preemptRecentLowerPriority(priority: number, now: number): void {
+    for (const pool of this.oneShotPools.values()) {
+      if (pool.priority >= priority) continue;
+      for (const voice of pool.voices) {
+        if (!voice.active || now - voice.startedAt > PRIORITY_PREEMPT_WINDOW_MS) continue;
+        voice.audio.pause();
+        voice.audio.currentTime = 0;
+        voice.active = false;
+        this.suppressedOneShots += 1;
+      }
+    }
+  }
+
+  private allowSyntheticEffect(key: string, cooldownMs: number): boolean {
+    const now = performance.now();
+    const lastPlayedAt = this.lastSyntheticEffectAt.get(key) ?? Number.NEGATIVE_INFINITY;
+    if (now - lastPlayedAt < cooldownMs) {
+      this.suppressedOneShots += 1;
+      return false;
+    }
+    this.lastSyntheticEffectAt.set(key, now);
+    return true;
+  }
+
+  private playOneShot(key: OneShotKey, volume: number, playbackRate: number): boolean {
+    if (!this.mediaEnabled || this.paused) return false;
+    const pool = this.oneShotPools.get(key);
+    if (!pool) return false;
+    const now = performance.now();
+    if (now - pool.lastPlayedAt < pool.cooldownMs) {
+      this.suppressedOneShots += 1;
+      return false;
+    }
+    pool.lastPlayedAt = now;
+    this.preemptRecentLowerPriority(pool.priority, now);
+
+    let voice = pool.voices.find((candidate) => !candidate.active);
+    if (!voice) {
+      voice = pool.voices.reduce((oldest, candidate) => (
+        candidate.startedAt < oldest.startedAt ? candidate : oldest
+      ));
+      voice.audio.pause();
+      this.recycledOneShots += 1;
+    }
+
+    voice.active = true;
+    voice.startedAt = now;
+    voice.priority = pool.priority;
+    voice.audio.currentTime = 0;
+    voice.audio.volume = Math.min(1, Math.max(0, volume));
+    voice.audio.playbackRate = playbackRate;
+    void voice.audio.play().catch(() => {
+      voice.active = false;
       // Sound playback may be rejected until the next explicit user gesture.
     });
+    return true;
   }
 
   private tone(

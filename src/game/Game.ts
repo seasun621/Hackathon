@@ -196,6 +196,7 @@ export class Game {
   private secondaryCooldown = 0;
   private upgradeOffers: ItemOffer[] = [];
   private selectedUpgradeIndex: number | null = null;
+  private upgradePresentationToken = 0;
   private anchorSelectionTimer = 0;
   private bombTrackingTimer = 0;
   private hudTimer = 0;
@@ -210,6 +211,15 @@ export class Game {
   private performanceBaselineGeometries = 0;
   private performanceBaselineTextures = 0;
   private performanceBaselineHeap = 0;
+  private performanceLogSessionId: string | null = null;
+  private performanceLogFileName = '';
+  private performanceLogSequence = 0;
+  private performanceLogStartedAt = 0;
+  private performanceLogTimer = 0;
+  private performanceLogFrames = 0;
+  private performanceLogWorkTotal = 0;
+  private performanceLogWorkMax = 0;
+  private performanceLogWriteError = false;
   private readonly mobilePerformanceProfile = window.matchMedia('(pointer: coarse)').matches
     || window.innerWidth < 900;
   private readonly maximumPixelRatio = Math.min(
@@ -1095,14 +1105,16 @@ export class Game {
     }).memory;
     this.performanceBaselineHeap = memory?.usedJSHeapSize ?? 0;
     if (this.performancePanelVisible) {
+      this.startPerformanceLogSession();
       this.performancePanel.dataset.level = 'good';
       this.performancePanel.textContent = 'PERF PROBE // COLLECTING  [SHIFT + T]';
-    }
+    } else this.finishPerformanceLogSession(false);
   }
 
   private updatePerformancePanel(frameIntervalSeconds: number, workMilliseconds: number): void {
     if (!this.performancePanelVisible || !this.performancePanel) return;
-    if (frameIntervalSeconds <= 0 || frameIntervalSeconds > 0.25) return;
+    if (frameIntervalSeconds <= 0 || document.hidden) return;
+    this.updatePerformanceLog(frameIntervalSeconds, workMilliseconds);
     this.performanceProbeTimer += frameIntervalSeconds;
     this.performanceProbeFrames += 1;
     this.performanceProbeWorkTotal += workMilliseconds;
@@ -1135,15 +1147,16 @@ export class Game {
     this.performancePanel.dataset.level = fps < 40 ? 'danger' : fps < 52 ? 'warn' : 'good';
     this.performancePanel.textContent = [
       'PERF PROBE // LOCAL DEV ONLY                         [SHIFT + T]',
+      `LOG       ${this.performanceLogWriteError ? 'WRITE ERROR' : 'REC'} #${String(this.performanceLogSequence).padStart(3)}  5 SEC -> performance-logs/${this.performanceLogFileName}`,
       `FPS       ${fps.toFixed(1).padStart(6)}   FRAME ${frameMilliseconds.toFixed(2).padStart(6)} ms`,
       `MAIN CPU  AVG ${averageWork.toFixed(2).padStart(6)} ms   PEAK ${this.performanceProbeWorkMax.toFixed(2).padStart(6)} ms`,
       `RES       PR ${this.currentPixelRatio.toFixed(2)}   ${this.renderer.domElement.width} x ${this.renderer.domElement.height}`,
       `RENDER    DRAW ${String(render.calls).padStart(4)}   TRI ${formatCount(render.triangles).padStart(7)}   PROGRAM ${String(this.renderer.info.programs?.length ?? 0).padStart(3)}`,
       `GPU MEM   GEO ${String(rendererMemory.geometries).padStart(5)} (+${rendererMemory.geometries - this.performanceBaselineGeometries})   TEX ${String(rendererMemory.textures).padStart(4)} (+${rendererMemory.textures - this.performanceBaselineTextures})`,
-      `CITY      CHUNK ${String(city.chunks).padStart(3)}   BODY ${String(city.physicsBodies).padStart(4)}   RAY MESH ${String(city.raycastMeshes).padStart(3)}`,
-      `DRONES    ALL ${String(drones.drones).padStart(2)} [S ${drones.scouts} / A ${drones.assaults}]   BULLET ${String(drones.bullets).padStart(3)}   BURST ${drones.bursts}`,
+      `CITY      CHUNK ${String(city.chunks).padStart(3)}   QUEUE ${String(city.buildQueue).padStart(2)}${city.buildActive ? '*' : ' '}   BODY ${String(city.physicsBodies).padStart(4)}   RAY MESH ${String(city.raycastMeshes).padStart(3)}`,
+      `DRONES    ALL ${String(drones.drones).padStart(2)} [S ${drones.scouts} / A ${drones.assaults}]   BULLET ${String(drones.bullets).padStart(3)}   BURST ${drones.bursts}   ASSET G${drones.modelGeometries}/M${drones.modelMaterials}`,
       `TARGETS   ALL ${String(targets.targets).padStart(2)} [ORB ${targets.ambient} / BOMB ${targets.bombs} / MED ${targets.healthPacks}]   FX ${targets.effects}`,
-      `RUNTIME   AUDIO ${String(audio.oneShots).padStart(3)} + LOOP ${audio.loops} (${audio.contextState})   DAMAGE DOM ${this.hud.damageNumbers.childElementCount}   PLAYER FX ${this.playerProjectiles.length}`,
+      `RUNTIME   AUDIO ${String(audio.oneShots).padStart(2)}/${audio.pooledVoices} + LOOP ${audio.loops} (${audio.contextState})   SUPPRESS ${audio.suppressedOneShots} / RECYCLE ${audio.recycledOneShots}   DAMAGE DOM ${this.hud.damageNumbers.childElementCount}   PLAYER FX ${this.playerProjectiles.length}`,
       `HEAP      ${heapText}`,
       `RUN       STAGE ${this.stage}   SCORE ${this.stats.score.toLocaleString('en-US')}   TIME ${this.formatElapsedTime(this.elapsedTime)}`,
     ].join('\n');
@@ -1152,6 +1165,211 @@ export class Game {
     this.performanceProbeFrames = 0;
     this.performanceProbeWorkTotal = 0;
     this.performanceProbeWorkMax = 0;
+  }
+
+  private startPerformanceLogSession(): void {
+    if (!import.meta.env.DEV) return;
+    if (this.performanceLogSessionId) this.finishPerformanceLogSession(false);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    this.performanceLogSessionId = `${timestamp}-${crypto.randomUUID().slice(0, 8)}`;
+    this.performanceLogFileName = `performance-${this.performanceLogSessionId}.jsonl`;
+    this.performanceLogSequence = 0;
+    this.performanceLogStartedAt = performance.now();
+    this.performanceLogTimer = 0;
+    this.performanceLogFrames = 0;
+    this.performanceLogWorkTotal = 0;
+    this.performanceLogWorkMax = 0;
+    this.performanceLogWriteError = false;
+    this.sendPerformanceLogRecord('session_start', {
+      schemaVersion: 1,
+      page: window.location.href,
+      userAgent: navigator.userAgent,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      devicePixelRatio: window.devicePixelRatio,
+      mobilePerformanceProfile: this.mobilePerformanceProfile,
+      samplingIntervalSeconds: 5,
+    });
+  }
+
+  private finishPerformanceLogSession(useBeacon: boolean): void {
+    if (!this.performanceLogSessionId) return;
+    const hasPartialWindow = this.performanceLogFrames > 0 && this.performanceLogTimer > 0;
+    this.sendPerformanceLogRecord('session_end', {
+      durationSeconds: (performance.now() - this.performanceLogStartedAt) / 1000,
+      finalWindow: hasPartialWindow
+        ? this.collectPerformanceLogSnapshot(
+          this.performanceLogTimer,
+          this.performanceLogFrames,
+          this.performanceLogWorkTotal,
+          this.performanceLogWorkMax,
+        )
+        : null,
+    }, useBeacon);
+    this.performanceLogSessionId = null;
+    this.performanceLogTimer = 0;
+    this.performanceLogFrames = 0;
+    this.performanceLogWorkTotal = 0;
+    this.performanceLogWorkMax = 0;
+  }
+
+  private updatePerformanceLog(frameIntervalSeconds: number, workMilliseconds: number): void {
+    if (!this.performanceLogSessionId) return;
+    this.performanceLogTimer += frameIntervalSeconds;
+    this.performanceLogFrames += 1;
+    this.performanceLogWorkTotal += workMilliseconds;
+    this.performanceLogWorkMax = Math.max(this.performanceLogWorkMax, workMilliseconds);
+    if (this.performanceLogTimer < 5) return;
+    const snapshot = this.collectPerformanceLogSnapshot(
+      this.performanceLogTimer,
+      this.performanceLogFrames,
+      this.performanceLogWorkTotal,
+      this.performanceLogWorkMax,
+    );
+    this.sendPerformanceLogRecord('sample', snapshot);
+    this.performanceLogTimer = 0;
+    this.performanceLogFrames = 0;
+    this.performanceLogWorkTotal = 0;
+    this.performanceLogWorkMax = 0;
+  }
+
+  private collectPerformanceLogSnapshot(
+    sampleSeconds: number,
+    sampleFrames: number,
+    workTotal: number,
+    workMax: number,
+  ): Record<string, unknown> {
+    const render = this.renderer.info.render;
+    const rendererMemory = this.renderer.info.memory;
+    const city = this.city.getPerformanceStats();
+    const drones = this.drones.getPerformanceStats();
+    const targets = this.targets.getPerformanceStats();
+    const audio = this.audio.getPerformanceStats();
+    const velocity = this.playerBody.linvel();
+    const position = this.playerBody.translation();
+    const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
+    const primary = this.items.getPrimaryStats();
+    const secondary = this.items.getSecondaryStats();
+    const browserMemory = (performance as Performance & {
+      memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number };
+    }).memory;
+    return {
+      sampleSeconds,
+      performance: {
+        fps: sampleFrames / sampleSeconds,
+        frameMilliseconds: sampleSeconds * 1000 / sampleFrames,
+        mainCpuAverageMilliseconds: workTotal / sampleFrames,
+        mainCpuPeakMilliseconds: workMax,
+        pixelRatio: this.currentPixelRatio,
+        drawCalls: render.calls,
+        triangles: render.triangles,
+        programs: this.renderer.info.programs?.length ?? 0,
+        geometries: rendererMemory.geometries,
+        geometryGrowthSinceProbeStart: rendererMemory.geometries - this.performanceBaselineGeometries,
+        textures: rendererMemory.textures,
+        textureGrowthSinceProbeStart: rendererMemory.textures - this.performanceBaselineTextures,
+        heapUsedBytes: browserMemory?.usedJSHeapSize ?? null,
+        heapTotalBytes: browserMemory?.totalJSHeapSize ?? null,
+        heapLimitBytes: browserMemory?.jsHeapSizeLimit ?? null,
+        heapGrowthSinceProbeStart: browserMemory
+          ? browserMemory.usedJSHeapSize - this.performanceBaselineHeap
+          : null,
+      },
+      world: {
+        city,
+        drones,
+        targets,
+        playerProjectiles: this.playerProjectiles.length,
+        damageDomNodes: this.hud.damageNumbers.childElementCount,
+        bombMarkerDomNodes: this.bombMarkerElements.size,
+        droneMarkerDomNodes: this.droneMarkerElements.size,
+        audio,
+      },
+      run: {
+        mode: this.mode,
+        score: this.stats.score,
+        stage: this.stage,
+        nextStageScore: this.nextStageScore,
+        scoreToNextStage: Math.max(0, this.nextStageScore - this.stats.score),
+        elapsedSeconds: this.elapsedTime,
+        combo: this.stats.combo,
+        bestCombo: this.stats.bestCombo,
+        shots: this.stats.shots,
+        hits: this.stats.hits,
+        accuracy: this.stats.shots > 0 ? this.stats.hits / this.stats.shots : 0,
+        topSpeed: this.stats.topSpeed,
+        falls: this.stats.falls,
+      },
+      player: {
+        position: { x: position.x, y: position.y, z: position.z },
+        velocity: { x: velocity.x, y: velocity.y, z: velocity.z },
+        speed,
+        grounded: this.isGrounded,
+        grappling: this.grappleAnchor !== null,
+        dashActive: this.dashTimeRemaining > 0,
+        health: this.health,
+        maxHealth: this.maxHealth,
+        stamina: this.stamina,
+      },
+      items: {
+        loadout: {
+          primary: this.items.getPrimaryId(),
+          secondary: this.items.getSecondaryId(),
+          equipment: this.items.getEquipmentId(),
+        },
+        primaryStats: primary,
+        secondaryStats: secondary,
+        owned: this.items.getOwnedItems().map((item) => ({
+          id: item.definition.id,
+          name: item.definition.name,
+          category: item.definition.category,
+          slot: item.definition.slot,
+          level: item.level,
+          equipped: item.equipped,
+        })),
+        modifiers: {
+          speedMultiplier: this.items.getSpeedMultiplier(),
+          gravityMultiplier: this.items.getGravityMultiplier(this.grappleAnchor !== null),
+          damageReduction: this.items.getDamageReduction(),
+          dashMultiplier: this.items.getDashMultiplier(),
+          bloodSiphonRatio: this.items.getBloodSiphonRatio(),
+        },
+        activeFeedback: {
+          gliding: this.itemGliding,
+          speedBoost: this.itemSpeedActive,
+        },
+      },
+    };
+  }
+
+  private sendPerformanceLogRecord(
+    type: 'session_start' | 'sample' | 'session_end',
+    payload: Record<string, unknown>,
+    useBeacon = false,
+  ): void {
+    if (!this.performanceLogSessionId) return;
+    const record = {
+      schemaVersion: 1,
+      sessionId: this.performanceLogSessionId,
+      sequence: this.performanceLogSequence,
+      type,
+      recordedAt: new Date().toISOString(),
+      sessionElapsedSeconds: (performance.now() - this.performanceLogStartedAt) / 1000,
+      ...payload,
+    };
+    this.performanceLogSequence += 1;
+    const body = JSON.stringify(record);
+    if (useBeacon && navigator.sendBeacon('/__perf-log', new Blob([body], { type: 'application/json' }))) return;
+    void fetch('/__perf-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: type === 'session_end',
+    }).then((response) => {
+      if (!response.ok) throw new Error(`Performance log write failed (${response.status}).`);
+    }).catch((error: unknown) => {
+      this.performanceLogWriteError = true;
+      console.warn('Could not write the local performance log.', error);
+    });
   }
 
   private tryAttach(): void {
@@ -1207,7 +1425,6 @@ export class Game {
     const weapon = this.items.getPrimaryStats();
     this.primaryCooldown = weapon.cooldown;
     this.stats.shots += 1;
-    this.audio.shoot(weapon.id);
     this.recoil = 1;
     this.shake = Math.max(this.shake, 0.24);
     this.flashLife = 0.045;
@@ -1218,6 +1435,7 @@ export class Game {
     const target = this.activeCombatTarget;
     const targetPosition = target ? this.getCombatTargetPosition(target) : null;
     if (weapon.id === 'machinegun' && (!target || !targetPosition)) {
+      this.audio.shoot(weapon.id);
       this.spawnMachinegunRound(muzzlePosition, weapon.damage);
       return;
     }
@@ -1226,10 +1444,14 @@ export class Game {
       muzzlePosition,
       targetPosition ?? muzzlePosition.clone().addScaledVector(this.cameraForward, 150),
     );
-    if (!target) return;
+    if (!target) {
+      this.audio.shoot(weapon.id);
+      return;
+    }
     if (weapon.id === 'machinegun') this.spawnMachinegunCasing(muzzlePosition);
     const qualityMultiplier = target.quality === 'perfect' ? 1 : 0.45;
-    this.applyCombatDamage(target, weapon.damage, qualityMultiplier);
+    const hit = this.applyCombatDamage(target, weapon.damage, qualityMultiplier);
+    if (!hit) this.audio.shoot(weapon.id);
   }
 
   private handlePickup(kind: 'normal' | 'gold', baseScore: number): void {
@@ -1250,21 +1472,22 @@ export class Game {
     else this.audio.hit();
   }
 
-  private applyCombatDamage(target: CombatTargetRef, damage: number, qualityMultiplier: number): void {
+  private applyCombatDamage(target: CombatTargetRef, damage: number, qualityMultiplier: number): boolean {
     if (target.type === 'health') {
       const healthPack = this.targets.activateHealthPackById(target.id, target.quality);
       if (healthPack) this.handleHealthPack(healthPack);
       else this.clearCombatMarker(target);
-      return;
+      return Boolean(healthPack);
     }
     const result = target.type === 'bomb'
       ? this.targets.detonateBombById(target.id, target.quality)
       : this.drones.damageDroneById(target.id, damage, qualityMultiplier);
     if (!result) {
       this.clearCombatMarker(target);
-      return;
+      return false;
     }
     this.handleCombatDamage(target.type, result, target.quality);
+    return true;
   }
 
   private handleHealthPack(result: HealthPackResult): void {
@@ -1505,10 +1728,22 @@ export class Game {
     this.hud.upgradeStage.textContent = `STAGE ${String(this.stage + 1).padStart(2, '0')}`;
     this.hud.upgradeReels.classList.add('rolling');
     this.hud.upgradeScreen.classList.remove('hidden');
-    this.hud.itemCards.forEach((card, index) => this.populateItemCard(card, this.upgradeOffers[index]));
+    this.upgradePresentationToken += 1;
+    const presentationToken = this.upgradePresentationToken;
+    for (const card of this.hud.itemCards) card.disabled = true;
+    this.populateUpgradeCardsIncrementally(0, presentationToken);
     this.itemPreviews.show(this.upgradeOffers);
     window.setTimeout(() => this.hud.upgradeReels.classList.remove('rolling'), 620);
     if (document.pointerLockElement === this.renderer.domElement) void document.exitPointerLock();
+  }
+
+  private populateUpgradeCardsIncrementally(index: number, token: number): void {
+    if (index >= this.hud.itemCards.length) return;
+    window.requestAnimationFrame(() => {
+      if (this.mode !== 'upgrade' || token !== this.upgradePresentationToken) return;
+      this.populateItemCard(this.hud.itemCards[index], this.upgradeOffers[index]);
+      this.populateUpgradeCardsIncrementally(index + 1, token);
+    });
   }
 
   private populateItemCard(card: HTMLButtonElement, offer: ItemOffer | undefined): void {
@@ -1684,6 +1919,7 @@ export class Game {
 
   private beginRun(): void {
     this.mode = 'playing';
+    this.upgradePresentationToken += 1;
     this.resetTouchControls();
     this.stats = this.blankStats();
     this.elapsedTime = 0;
@@ -1779,6 +2015,7 @@ export class Game {
       this.renderer.setSize(window.innerWidth, window.innerHeight);
       this.renderer.setPixelRatio(this.currentPixelRatio);
     });
+    window.addEventListener('beforeunload', () => this.finishPerformanceLogSession(true));
 
     document.addEventListener('mousemove', (event) => {
       if (document.pointerLockElement !== this.renderer.domElement) return;

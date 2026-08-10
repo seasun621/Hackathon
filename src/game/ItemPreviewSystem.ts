@@ -148,6 +148,8 @@ function disposeModel(model: THREE.Group): void {
 export class ItemPreviewSystem {
   private readonly slots: PreviewSlot[];
   private active = false;
+  private pendingOffers: Array<ItemOffer | undefined> | null = null;
+  private pendingSlotIndex = 0;
 
   constructor(hosts: HTMLElement[]) {
     this.slots = hosts.map((host) => {
@@ -169,24 +171,35 @@ export class ItemPreviewSystem {
 
   show(offers: ItemOffer[]): void {
     this.active = true;
-    this.slots.forEach((slot, index) => {
-      if (slot.model) {
-        slot.scene.remove(slot.model);
-        disposeModel(slot.model);
-      }
-      const offer = offers[index];
-      slot.model = offer ? createItemModel(offer.definition) : null;
-      if (slot.model) slot.scene.add(slot.model);
-    });
+    this.pendingOffers = this.slots.map((_, index) => offers[index]);
+    this.pendingSlotIndex = 0;
+    for (const slot of this.slots) {
+      if (slot.model) slot.model.visible = false;
+    }
   }
 
   hide(): void {
     this.active = false;
+    this.pendingOffers = null;
   }
 
   update(dt: number): void {
     if (!this.active) return;
+    if (this.pendingOffers && this.pendingSlotIndex < this.slots.length) {
+      const index = this.pendingSlotIndex;
+      const slot = this.slots[index];
+      if (slot.model) {
+        slot.scene.remove(slot.model);
+        disposeModel(slot.model);
+      }
+      const offer = this.pendingOffers[index];
+      slot.model = offer ? createItemModel(offer.definition) : null;
+      if (slot.model) slot.scene.add(slot.model);
+      this.pendingSlotIndex += 1;
+      if (this.pendingSlotIndex >= this.slots.length) this.pendingOffers = null;
+    }
     for (const slot of this.slots) {
+      if (!slot.model || !slot.model.visible) continue;
       const width = Math.max(1, Math.floor(slot.host.clientWidth));
       const height = Math.max(1, Math.floor(slot.host.clientHeight));
       if (slot.width !== width || slot.height !== height) {
@@ -196,7 +209,7 @@ export class ItemPreviewSystem {
         slot.camera.aspect = width / height;
         slot.camera.updateProjectionMatrix();
       }
-      if (slot.model) slot.model.rotation.y += dt * 0.7;
+      slot.model.rotation.y += dt * 0.7;
       slot.renderer.render(slot.scene, slot.camera);
     }
   }
