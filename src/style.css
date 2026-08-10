@@ -3006,6 +3006,61 @@ button.secondary-button {
   clip-path: polygon(12px 0, 100% 0, calc(100% - 12px) 100%, 0 100%);
 }
 
+/* Three-mode selection layout: keep every label in normal document flow. */
+.menu-panel:not(.pause-state) .mode-card {
+  min-height: 205px;
+  padding: 14px 16px 17px;
+  align-content: start;
+}
+
+.menu-panel:not(.pause-state) .mode-icon {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: 43px;
+  height: 43px;
+  margin: 0 0 5px;
+  translate: none;
+}
+
+.menu-panel:not(.pause-state) .combat-icon {
+  margin-bottom: -4px;
+  scale: .78;
+  transform-origin: left top;
+}
+
+.menu-panel:not(.pause-state) .mode-kicker {
+  display: block;
+  color: #9baabd;
+  font: 800 10px/1.2 'KBL Jump Condensed', sans-serif;
+  letter-spacing: .1em;
+}
+
+.menu-panel:not(.pause-state) .mode-card > strong {
+  margin: 2px 0 4px;
+  font-size: clamp(23px, 2.15vw, 30px);
+  line-height: 1.1;
+}
+
+.menu-panel:not(.pause-state) .mode-card > p {
+  max-width: 100%;
+  min-height: 40px;
+  margin: 4px 0 8px;
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.menu-panel:not(.pause-state) .mode-features {
+  display: flex;
+  gap: 5px;
+  margin-top: auto;
+}
+
+.menu-panel:not(.pause-state) .mode-features b {
+  padding: 3px 6px 2px;
+  font-size: 8px;
+}
+
 .panel,
 .upgrade-panel,
 .help-dialog {
@@ -3097,3 +3152,12 @@ button.mode-card,
 
 /* Keep the score group comfortably inside its popup. */
 .toast-points { margin-left: 30px; }
+
+/* Final authority for the three-column protocol cards. */
+.menu-panel:not(.pause-state) .mode-card > p {
+  max-width: 100%;
+  min-height: 40px;
+  margin: 4px 0 8px;
+  font-size: 11px;
+  line-height: 1.42;
+}
