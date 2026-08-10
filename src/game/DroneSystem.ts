@@ -104,6 +104,28 @@ export class DroneSystem {
     this.nextFormationIndex = 0;
   }
 
+  getPerformanceStats(): {
+    drones: number;
+    scouts: number;
+    assaults: number;
+    bullets: number;
+    bursts: number;
+  } {
+    let scouts = 0;
+    let assaults = 0;
+    for (const drone of this.drones) {
+      if (drone.kind === 'assault') assaults += 1;
+      else scouts += 1;
+    }
+    return {
+      drones: this.drones.length,
+      scouts,
+      assaults,
+      bullets: this.bullets.length,
+      bursts: this.bursts.length,
+    };
+  }
+
   update(
     dt: number,
     playerPosition: THREE.Vector3,

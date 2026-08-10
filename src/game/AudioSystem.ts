@@ -27,6 +27,7 @@ export class AudioSystem {
   private readonly droneShootBurst = new Audio(droneShootSoundUrl);
   private readonly playerHitBurst = new Audio(playerHitSoundUrl);
   private readonly fadeFrames = new Map<HTMLAudioElement, number>();
+  private readonly activeOneShots = new Set<HTMLAudioElement>();
   private mediaEnabled = false;
   private paused = true;
   private intermission = false;
@@ -80,6 +81,16 @@ export class AudioSystem {
     }
     if (!this.mediaEnabled) return;
     this.startMusic();
+  }
+
+  getPerformanceStats(): { oneShots: number; loops: number; contextState: string } {
+    const loops = [this.music, this.ropeRide, this.wind]
+      .reduce((count, audio) => count + (audio.paused ? 0 : 1), 0);
+    return {
+      oneShots: this.activeOneShots.size,
+      loops,
+      contextState: this.context?.state ?? 'none',
+    };
   }
 
   setIntermission(active: boolean): void {
@@ -323,6 +334,12 @@ export class AudioSystem {
   ): void {
     if (!this.mediaEnabled || this.paused) return;
     const voice = template.cloneNode(true) as HTMLAudioElement;
+    const releaseVoice = (): void => {
+      this.activeOneShots.delete(voice);
+    };
+    this.activeOneShots.add(voice);
+    voice.addEventListener('ended', releaseVoice, { once: true });
+    voice.addEventListener('error', releaseVoice, { once: true });
     const peakVolume = Math.min(1, Math.max(0, volume));
     voice.volume = 0;
     voice.playbackRate = playbackRate;
@@ -337,6 +354,7 @@ export class AudioSystem {
       requestAnimationFrame(updateEnvelope);
     };
     void voice.play().then(() => requestAnimationFrame(updateEnvelope)).catch(() => {
+      releaseVoice();
       // Sound playback may be rejected until the next explicit user gesture.
     });
   }

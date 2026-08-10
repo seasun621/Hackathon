@@ -144,6 +144,30 @@ export class TargetSystem {
     this.nextBombSide = Math.random() < 0.5 ? -1 : 1;
   }
 
+  getPerformanceStats(): {
+    targets: number;
+    ambient: number;
+    bombs: number;
+    healthPacks: number;
+    effects: number;
+  } {
+    let ambient = 0;
+    let bombs = 0;
+    let healthPacks = 0;
+    for (const target of this.targets) {
+      if (target.kind === 'bomb') bombs += 1;
+      else if (target.kind === 'health') healthPacks += 1;
+      else ambient += 1;
+    }
+    return {
+      targets: this.targets.length,
+      ambient,
+      bombs,
+      healthPacks,
+      effects: this.effects.length,
+    };
+  }
+
   onChunksLoaded(chunks: LoadedTargetChunk[], playerPosition: THREE.Vector3): void {
     let ambientCount = this.targets.reduce(
       (count, target) => count + (target.kind === 'normal' || target.kind === 'gold' ? 1 : 0),

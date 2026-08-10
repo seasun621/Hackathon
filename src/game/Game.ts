@@ -201,6 +201,15 @@ export class Game {
   private hudTimer = 0;
   private performanceTimer = 0;
   private performanceFrames = 0;
+  private performancePanel: HTMLPreElement | null = null;
+  private performancePanelVisible = false;
+  private performanceProbeTimer = 0;
+  private performanceProbeFrames = 0;
+  private performanceProbeWorkTotal = 0;
+  private performanceProbeWorkMax = 0;
+  private performanceBaselineGeometries = 0;
+  private performanceBaselineTextures = 0;
+  private performanceBaselineHeap = 0;
   private readonly mobilePerformanceProfile = window.matchMedia('(pointer: coarse)').matches
     || window.innerWidth < 900;
   private readonly maximumPixelRatio = Math.min(
@@ -310,6 +319,7 @@ export class Game {
     this.createWeaponRig();
 
     this.hud = this.collectHud();
+    if (import.meta.env.DEV) this.performancePanel = this.createPerformancePanel(root);
     this.itemPreviews = new ItemPreviewSystem([
       requiredElement('itemPreview0'),
       requiredElement('itemPreview1'),
@@ -327,7 +337,9 @@ export class Game {
   }
 
   private readonly frame = (timestamp: number): void => {
-    const realDt = clamp((timestamp - this.lastFrameTime) / 1000, 0, 0.05);
+    const workStartedAt = performance.now();
+    const rawDt = Math.max(0, (timestamp - this.lastFrameTime) / 1000);
+    const realDt = clamp(rawDt, 0, 0.05);
     this.lastFrameTime = timestamp;
 
     if (this.mode === 'playing') this.updatePlaying(realDt);
@@ -380,6 +392,7 @@ export class Game {
     }
     this.updateAdaptiveResolution(realDt);
     this.renderer.render(this.scene, this.camera);
+    this.updatePerformancePanel(rawDt, performance.now() - workStartedAt);
   };
 
   private updatePlaying(realDt: number): void {
@@ -1058,6 +1071,89 @@ export class Game {
     this.performanceFrames = 0;
   }
 
+  private createPerformancePanel(root: HTMLElement): HTMLPreElement {
+    const panel = document.createElement('pre');
+    panel.className = 'performance-probe';
+    panel.hidden = true;
+    panel.textContent = 'PERF PROBE // COLLECTING';
+    root.append(panel);
+    return panel;
+  }
+
+  private togglePerformancePanel(): void {
+    if (!this.performancePanel) return;
+    this.performancePanelVisible = !this.performancePanelVisible;
+    this.performancePanel.hidden = !this.performancePanelVisible;
+    this.performanceProbeTimer = 0;
+    this.performanceProbeFrames = 0;
+    this.performanceProbeWorkTotal = 0;
+    this.performanceProbeWorkMax = 0;
+    this.performanceBaselineGeometries = this.renderer.info.memory.geometries;
+    this.performanceBaselineTextures = this.renderer.info.memory.textures;
+    const memory = (performance as Performance & {
+      memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
+    }).memory;
+    this.performanceBaselineHeap = memory?.usedJSHeapSize ?? 0;
+    if (this.performancePanelVisible) {
+      this.performancePanel.dataset.level = 'good';
+      this.performancePanel.textContent = 'PERF PROBE // COLLECTING  [SHIFT + T]';
+    }
+  }
+
+  private updatePerformancePanel(frameIntervalSeconds: number, workMilliseconds: number): void {
+    if (!this.performancePanelVisible || !this.performancePanel) return;
+    if (frameIntervalSeconds <= 0 || frameIntervalSeconds > 0.25) return;
+    this.performanceProbeTimer += frameIntervalSeconds;
+    this.performanceProbeFrames += 1;
+    this.performanceProbeWorkTotal += workMilliseconds;
+    this.performanceProbeWorkMax = Math.max(this.performanceProbeWorkMax, workMilliseconds);
+    if (this.performanceProbeTimer < 0.5) return;
+
+    const fps = this.performanceProbeFrames / this.performanceProbeTimer;
+    const frameMilliseconds = this.performanceProbeTimer * 1000 / this.performanceProbeFrames;
+    const averageWork = this.performanceProbeWorkTotal / this.performanceProbeFrames;
+    const render = this.renderer.info.render;
+    const rendererMemory = this.renderer.info.memory;
+    const city = this.city.getPerformanceStats();
+    const drones = this.drones.getPerformanceStats();
+    const targets = this.targets.getPerformanceStats();
+    const audio = this.audio.getPerformanceStats();
+    const browserMemory = (performance as Performance & {
+      memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
+    }).memory;
+    const heapText = browserMemory
+      ? `${(browserMemory.usedJSHeapSize / 1048576).toFixed(1)} MB  `
+        + `(+${Math.max(0, (browserMemory.usedJSHeapSize - this.performanceBaselineHeap) / 1048576).toFixed(1)})  `
+        + `/ ${(browserMemory.jsHeapSizeLimit / 1073741824).toFixed(1)} GB`
+      : 'not exposed by browser';
+    const formatCount = (value: number): string => value >= 1_000_000
+      ? `${(value / 1_000_000).toFixed(2)}M`
+      : value >= 1_000
+        ? `${(value / 1_000).toFixed(1)}K`
+        : String(value);
+
+    this.performancePanel.dataset.level = fps < 40 ? 'danger' : fps < 52 ? 'warn' : 'good';
+    this.performancePanel.textContent = [
+      'PERF PROBE // LOCAL DEV ONLY                         [SHIFT + T]',
+      `FPS       ${fps.toFixed(1).padStart(6)}   FRAME ${frameMilliseconds.toFixed(2).padStart(6)} ms`,
+      `MAIN CPU  AVG ${averageWork.toFixed(2).padStart(6)} ms   PEAK ${this.performanceProbeWorkMax.toFixed(2).padStart(6)} ms`,
+      `RES       PR ${this.currentPixelRatio.toFixed(2)}   ${this.renderer.domElement.width} x ${this.renderer.domElement.height}`,
+      `RENDER    DRAW ${String(render.calls).padStart(4)}   TRI ${formatCount(render.triangles).padStart(7)}   PROGRAM ${String(this.renderer.info.programs?.length ?? 0).padStart(3)}`,
+      `GPU MEM   GEO ${String(rendererMemory.geometries).padStart(5)} (+${rendererMemory.geometries - this.performanceBaselineGeometries})   TEX ${String(rendererMemory.textures).padStart(4)} (+${rendererMemory.textures - this.performanceBaselineTextures})`,
+      `CITY      CHUNK ${String(city.chunks).padStart(3)}   BODY ${String(city.physicsBodies).padStart(4)}   RAY MESH ${String(city.raycastMeshes).padStart(3)}`,
+      `DRONES    ALL ${String(drones.drones).padStart(2)} [S ${drones.scouts} / A ${drones.assaults}]   BULLET ${String(drones.bullets).padStart(3)}   BURST ${drones.bursts}`,
+      `TARGETS   ALL ${String(targets.targets).padStart(2)} [ORB ${targets.ambient} / BOMB ${targets.bombs} / MED ${targets.healthPacks}]   FX ${targets.effects}`,
+      `RUNTIME   AUDIO ${String(audio.oneShots).padStart(3)} + LOOP ${audio.loops} (${audio.contextState})   DAMAGE DOM ${this.hud.damageNumbers.childElementCount}   PLAYER FX ${this.playerProjectiles.length}`,
+      `HEAP      ${heapText}`,
+      `RUN       STAGE ${this.stage}   SCORE ${this.stats.score.toLocaleString('en-US')}   TIME ${this.formatElapsedTime(this.elapsedTime)}`,
+    ].join('\n');
+
+    this.performanceProbeTimer = 0;
+    this.performanceProbeFrames = 0;
+    this.performanceProbeWorkTotal = 0;
+    this.performanceProbeWorkMax = 0;
+  }
+
   private tryAttach(): void {
     if (!this.hasCandidateAnchor || this.mode !== 'playing') return;
     this.grappleAnchor = this.candidateAnchor.clone();
@@ -1710,6 +1806,15 @@ export class Game {
 
     document.addEventListener('contextmenu', (event) => event.preventDefault());
     document.addEventListener('keydown', (event) => {
+      if (
+        import.meta.env.DEV
+        && event.shiftKey
+        && event.code === 'KeyT'
+        && !event.repeat
+      ) {
+        event.preventDefault();
+        this.togglePerformancePanel();
+      }
       if (
         this.mode === 'playing'
         && document.pointerLockElement === this.renderer.domElement
