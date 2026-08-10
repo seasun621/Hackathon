@@ -174,7 +174,7 @@ export class TargetSystem {
   }
 
   onChunksLoaded(chunks: LoadedTargetChunk[], playerPosition: THREE.Vector3): void {
-    if (this.gameMode === 'time-attack') return;
+    if (this.gameMode !== 'combat') return;
     let ambientCount = this.targets.reduce(
       (count, target) => count + (target.kind === 'normal' || target.kind === 'gold' ? 1 : 0),
       0,
@@ -224,7 +224,7 @@ export class TargetSystem {
         (count, target) => count + (target.kind === 'bomb' ? 1 : 0),
         0,
       );
-      const desiredBombs = this.gameMode === 'time-attack'
+      const desiredBombs = this.gameMode !== 'combat'
         ? CONFIG.timeAttackMinimumBombs
         : CONFIG.minimumBombs;
       const missingBombs = Math.max(0, desiredBombs - bombCount);
@@ -530,8 +530,8 @@ export class TargetSystem {
     horizontalForward.normalize();
     const right = new THREE.Vector3(-horizontalForward.z, 0, horizontalForward.x);
     const bombDistance = THREE.MathUtils.lerp(
-      this.gameMode === 'time-attack' ? CONFIG.timeAttackBombSpawnDistanceMin : CONFIG.bombSpawnDistanceMin,
-      this.gameMode === 'time-attack' ? CONFIG.timeAttackBombSpawnDistanceMax : CONFIG.bombSpawnDistanceMax,
+      this.gameMode !== 'combat' ? CONFIG.timeAttackBombSpawnDistanceMin : CONFIG.bombSpawnDistanceMin,
+      this.gameMode !== 'combat' ? CONFIG.timeAttackBombSpawnDistanceMax : CONFIG.bombSpawnDistanceMax,
       Math.random(),
     );
     const distance = kind === 'bomb' ? bombDistance : 36 + Math.random() * 76;
@@ -711,8 +711,8 @@ export class TargetSystem {
     const target = this.targets[index];
     if (target.kind === 'bomb') {
       this.bombSpawnCooldown = THREE.MathUtils.lerp(
-        this.gameMode === 'time-attack' ? CONFIG.timeAttackBombRespawnDelayMin : CONFIG.bombRespawnDelayMin,
-        this.gameMode === 'time-attack' ? CONFIG.timeAttackBombRespawnDelayMax : CONFIG.bombRespawnDelayMax,
+        this.gameMode !== 'combat' ? CONFIG.timeAttackBombRespawnDelayMin : CONFIG.bombRespawnDelayMin,
+        this.gameMode !== 'combat' ? CONFIG.timeAttackBombRespawnDelayMax : CONFIG.bombRespawnDelayMax,
         Math.random(),
       );
     }

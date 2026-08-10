@@ -63,7 +63,7 @@ interface HudElements {
   helpButton: HTMLButtonElement;
   helpCloseButton: HTMLButtonElement;
   helpDialog: HTMLElement;
-  modeCards: HTMLButtonElement[];
+  modeCards: HTMLElement[];
   bestScore: HTMLElement;
   results: HTMLElement;
   resultScore: HTMLElement;
@@ -77,18 +77,23 @@ interface HudElements {
   replayButton: HTMLButtonElement;
   resultMenuButton: HTMLButtonElement;
   resultTime: HTMLElement;
+  leaderboardPanel: HTMLElement;
+  leaderboardTitle: HTMLElement;
+  leaderboardList: HTMLElement;
+  combatEndingScreen: HTMLElement;
   upgradeScreen: HTMLElement;
   upgradeStage: HTMLElement;
   upgradeReels: HTMLElement;
-  itemCards: HTMLButtonElement[];
-  upgradeConfirmBar: HTMLElement;
-  upgradeConfirmEyebrow: HTMLElement;
-  upgradeConfirmName: HTMLElement;
-  upgradeConfirmSummary: HTMLElement;
-  upgradeReplaceWarning: HTMLElement;
-  upgradeReplaceCheck: HTMLInputElement;
-  upgradeReplaceText: HTMLElement;
-  upgradeConfirmButton: HTMLButtonElement;
+  itemCards: HTMLElement[];
+}
+
+interface RankingEntry {
+  score: number;
+  stage: number;
+  bombs: number;
+  duration: number;
+  completedAt: number;
+  victory: boolean;
 }
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -198,7 +203,9 @@ export class Game {
   private itemSpeedActive = false;
   private itemProcWashTimeout: number | null = null;
   private bestScore = 0;
-  private readonly bestScores: Record<GameMode, number> = { 'time-attack': 0, combat: 0 };
+  private readonly bestScores: Record<GameMode, number> = { 'time-attack': 0, combat: 0, endless: 0 };
+  private runVictory = false;
+  private endingTimeout: number | null = null;
   private readonly bombMarkerElements = new Map<number, HTMLElement>();
   private readonly droneMarkerElements = new Map<number, HTMLElement>();
   private readonly visibleBombMarkerIds = new Set<number>();
@@ -459,7 +466,10 @@ export class Game {
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
     this.stats.topSpeed = Math.max(this.stats.topSpeed, speed);
     this.updateStamina(realDt);
-    if (this.gameMode === 'combat' && this.stats.score >= this.nextStageScore) this.enterUpgradeSelection();
+    if (this.gameMode === 'combat' && this.stats.score >= this.nextStageScore) {
+      if (this.stage >= CONFIG.combatFinalStage) this.beginCombatEnding();
+      else this.enterUpgradeSelection();
+    }
     // The street and every rooftop are valid play spaces. This guard now only
     // handles an impossible physics escape below the oversized ground collider.
     if (this.playerPosition.y < -20) this.respawnAfterFall();
@@ -1753,16 +1763,16 @@ export class Game {
     this.audio.setIntermission(true);
     this.upgradeOffers = this.items.rollOffers(3);
     this.selectedUpgradeIndex = null;
-    this.hud.upgradeConfirmBar.classList.add('hidden');
-    this.hud.upgradeReplaceWarning.classList.add('hidden');
-    this.hud.upgradeReplaceCheck.checked = false;
-    this.hud.upgradeConfirmButton.disabled = true;
     this.hud.upgradeStage.textContent = `STAGE ${String(this.stage + 1).padStart(2, '0')}`;
     this.hud.upgradeReels.classList.add('rolling');
     this.hud.upgradeScreen.classList.remove('hidden');
     this.upgradePresentationToken += 1;
     const presentationToken = this.upgradePresentationToken;
-    for (const card of this.hud.itemCards) card.disabled = true;
+    for (const card of this.hud.itemCards) {
+      card.classList.add('disabled');
+      card.setAttribute('aria-disabled', 'true');
+      card.querySelector('.item-card-confirm')?.classList.add('hidden');
+    }
     this.populateUpgradeCardsIncrementally(0, presentationToken);
     this.itemPreviews.show(this.upgradeOffers);
     window.setTimeout(() => this.hud.upgradeReels.classList.remove('rolling'), 620);
@@ -1778,12 +1788,14 @@ export class Game {
     });
   }
 
-  private populateItemCard(card: HTMLButtonElement, offer: ItemOffer | undefined): void {
+  private populateItemCard(card: HTMLElement, offer: ItemOffer | undefined): void {
     if (!offer) {
-      card.disabled = true;
+      card.classList.add('disabled');
+      card.setAttribute('aria-disabled', 'true');
       return;
     }
-    card.disabled = false;
+    card.classList.remove('disabled');
+    card.setAttribute('aria-disabled', 'false');
     const { definition } = offer;
     card.className = `item-card category-${definition.category} status-${offer.status.toLowerCase()}`;
     card.setAttribute('aria-pressed', 'false');
@@ -1822,6 +1834,7 @@ export class Game {
               ? 'EQUIPMENT // ONE SLOT'
               : 'PASSIVE // STACKABLE';
     }
+    card.querySelector('.item-card-confirm')?.classList.add('hidden');
   }
 
   private renderItemStats(host: HTMLElement, comparisons: ItemStatComparison[]): void {
@@ -1864,21 +1877,29 @@ export class Game {
       const selected = cardIndex === index;
       card.classList.toggle('selected', selected);
       card.setAttribute('aria-pressed', String(selected));
+      const confirm = card.querySelector<HTMLElement>('.item-card-confirm');
+      confirm?.classList.toggle('hidden', !selected);
     });
-    this.hud.upgradeConfirmBar.classList.remove('hidden');
-    this.hud.upgradeConfirmEyebrow.textContent = offer.status === 'REPLACE'
-      ? 'LOADOUT CHANGE SELECTED'
-      : `${offer.status} SELECTED`;
-    this.hud.upgradeConfirmName.textContent = offer.definition.name;
-    this.hud.upgradeConfirmSummary.textContent = offer.definition.description;
-    this.hud.upgradeReplaceCheck.checked = false;
-    const requiresWarning = Boolean(offer.replacedItem);
-    this.hud.upgradeReplaceWarning.classList.toggle('hidden', !requiresWarning);
-    this.hud.upgradeConfirmButton.disabled = requiresWarning;
-    this.hud.upgradeConfirmButton.textContent = requiresWarning ? 'ACKNOWLEDGE & EQUIP' : 'CONFIRM LOADOUT';
-    if (offer.replacedItem) {
-      this.hud.upgradeReplaceText.textContent = `현재 장비 [${offer.replacedItem.name}] → [${offer.definition.name}]. 교체에 동의합니다.`;
-    } else this.hud.upgradeReplaceText.textContent = '';
+    const card = this.hud.itemCards[index];
+    const kicker = card.querySelector<HTMLElement>('.item-confirm-kicker');
+    const name = card.querySelector<HTMLElement>('.item-confirm-name');
+    const warning = card.querySelector<HTMLElement>('.item-confirm-warning');
+    const apply = card.querySelector<HTMLButtonElement>('.item-confirm-apply');
+    if (kicker) kicker.textContent = offer.replacedItem ? 'LOADOUT REPLACEMENT' : `${offer.status} GEAR CHOICE`;
+    if (name) name.textContent = offer.definition.name;
+    if (warning) warning.textContent = offer.replacedItem
+      ? `${offer.replacedItem.name}을 해제하고 이 장비로 교체합니다.`
+      : `${offer.definition.description} 이 선택을 확정할까요?`;
+    if (apply) apply.textContent = offer.replacedItem ? '교체 장착' : offer.status === 'UPGRADE' ? '강화 확정' : '선택 확정';
+  }
+
+  private cancelUpgradeSelection(index: number): void {
+    if (this.selectedUpgradeIndex !== index) return;
+    this.selectedUpgradeIndex = null;
+    const card = this.hud.itemCards[index];
+    card.classList.remove('selected');
+    card.setAttribute('aria-pressed', 'false');
+    card.querySelector('.item-card-confirm')?.classList.add('hidden');
   }
 
   private getStageScoreGate(stage: number): number {
@@ -1892,7 +1913,6 @@ export class Game {
     const offer = this.upgradeOffers[index];
     if (!offer) return;
     if (this.selectedUpgradeIndex !== index) return;
-    if (offer.replacedItem && !this.hud.upgradeReplaceCheck.checked) return;
     const result = this.items.applyOffer(offer);
     const previousMaxHealth = this.maxHealth;
     this.maxHealth = CONFIG.playerBaseHealth
@@ -1912,7 +1932,6 @@ export class Game {
     this.secondaryCooldown = 0;
     this.mode = 'playing';
     this.hud.upgradeScreen.classList.add('hidden');
-    this.hud.upgradeConfirmBar.classList.add('hidden');
     this.selectedUpgradeIndex = null;
     this.itemPreviews.hide();
     this.updateInventoryHud();
@@ -1950,6 +1969,9 @@ export class Game {
   }
 
   private beginRun(): void {
+    if (this.endingTimeout !== null) window.clearTimeout(this.endingTimeout);
+    this.endingTimeout = null;
+    this.runVictory = false;
     this.mode = 'playing';
     this.upgradePresentationToken += 1;
     this.resetTouchControls();
@@ -1998,6 +2020,25 @@ export class Game {
     this.hud.menuPanel.classList.remove('pause-state');
   }
 
+  private beginCombatEnding(): void {
+    if (this.mode !== 'playing' || this.gameMode !== 'combat') return;
+    this.mode = 'ending';
+    this.runVictory = true;
+    this.rightHeld = false;
+    this.keys.clear();
+    this.detach();
+    this.invulnerabilityTimer = 99;
+    this.audio.setIntermission(true);
+    this.audio.defuse();
+    this.hud.combatEndingScreen.classList.remove('hidden');
+    if (document.pointerLockElement === this.renderer.domElement) void document.exitPointerLock();
+    this.endingTimeout = window.setTimeout(() => {
+      this.endingTimeout = null;
+      this.hud.combatEndingScreen.classList.add('hidden');
+      this.finishRun();
+    }, 3400);
+  }
+
   private finishRun(): void {
     this.mode = 'over';
     this.rightHeld = false;
@@ -2007,7 +2048,10 @@ export class Game {
     this.dashTimeRemaining = 0;
     this.detach();
     const accuracy = this.stats.shots > 0 ? Math.round((this.stats.hits / this.stats.shots) * 100) : 0;
-    const isRecord = this.stats.score > this.bestScore;
+    const rankingMode = this.gameMode === 'combat' || this.gameMode === 'time-attack'
+      ? this.gameMode
+      : null;
+    const isRecord = rankingMode !== null && this.stats.score > this.bestScore;
     if (isRecord) {
       this.bestScore = this.stats.score;
       try {
@@ -2024,16 +2068,90 @@ export class Game {
     this.hud.resultSpeed.textContent = `${Math.round(this.stats.topSpeed * 3.6)} km/h`;
     this.hud.resultFalls.textContent = String(this.stats.falls);
     this.hud.resultTime.textContent = this.formatElapsedTime(this.elapsedTime);
-    this.hud.resultEyebrow.textContent = this.gameMode === 'time-attack'
-      ? 'TIME ATTACK COMPLETE'
-      : `COMBAT STAGE ${String(this.stage).padStart(2, '0')} COMPLETE`;
+    this.hud.resultEyebrow.textContent = this.runVictory
+      ? 'CITY LIBERATED // COMBAT ENDING'
+      : this.gameMode === 'time-attack'
+        ? 'TIME ATTACK COMPLETE'
+        : `COMBAT STAGE ${String(this.stage).padStart(2, '0')} COMPLETE`;
     this.hud.resultScoreLabel.textContent = this.gameMode === 'time-attack'
       ? `BOMBS ${this.bombsDestroyed} // SCORE`
       : 'SCORE';
     this.hud.recordLabel.textContent = isRecord ? 'NEW PERSONAL RECORD' : `BEST ${this.bestScore.toLocaleString('ko-KR')}`;
     this.hud.recordLabel.classList.toggle('new-record', isRecord);
+    if (rankingMode) {
+      const ranking = this.saveRankingEntry(rankingMode);
+      this.renderLeaderboard(rankingMode, ranking.entries, ranking.completedAt);
+      this.hud.leaderboardPanel.classList.remove('hidden');
+    } else {
+      this.hud.leaderboardPanel.classList.add('hidden');
+    }
     this.hud.results.classList.remove('hidden');
     if (document.pointerLockElement === this.renderer.domElement) void document.exitPointerLock();
+  }
+
+  private saveRankingEntry(mode: 'combat' | 'time-attack'): {
+    entries: RankingEntry[];
+    completedAt: number;
+  } {
+    const completedAt = Date.now();
+    const entry: RankingEntry = {
+      score: this.stats.score,
+      stage: this.stage,
+      bombs: this.bombsDestroyed,
+      duration: this.elapsedTime,
+      completedAt,
+      victory: this.runVictory,
+    };
+    const key = `super-swing-ranking-${mode}`;
+    let entries: RankingEntry[] = [];
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+      if (Array.isArray(parsed)) {
+        entries = parsed.filter((candidate): candidate is RankingEntry => (
+          typeof candidate === 'object'
+          && candidate !== null
+          && Number.isFinite((candidate as RankingEntry).score)
+          && Number.isFinite((candidate as RankingEntry).stage)
+        ));
+      }
+    } catch {
+      entries = [];
+    }
+    entries.push(entry);
+    entries.sort((left, right) => mode === 'combat'
+      ? right.stage - left.stage || right.score - left.score || left.duration - right.duration
+      : right.score - left.score || (right.bombs ?? 0) - (left.bombs ?? 0) || left.duration - right.duration);
+    entries = entries.slice(0, 8);
+    try {
+      localStorage.setItem(key, JSON.stringify(entries));
+    } catch {
+      // The current result still renders when persistent storage is unavailable.
+    }
+    return { entries, completedAt };
+  }
+
+  private renderLeaderboard(
+    mode: 'combat' | 'time-attack',
+    entries: RankingEntry[],
+    currentCompletedAt: number,
+  ): void {
+    this.hud.leaderboardTitle.textContent = mode === 'combat' ? '전투 개인 랭킹' : '타임어택 개인 랭킹';
+    this.hud.leaderboardList.replaceChildren();
+    entries.slice(0, 6).forEach((entry, index) => {
+      const row = document.createElement('div');
+      row.className = 'leaderboard-row';
+      row.classList.toggle('current', entry.completedAt === currentCompletedAt);
+      const place = document.createElement('b');
+      place.textContent = String(index + 1).padStart(2, '0');
+      const detail = document.createElement('span');
+      detail.innerHTML = mode === 'combat'
+        ? `<strong>${entry.victory ? 'CLEAR' : `STAGE ${String(entry.stage).padStart(2, '0')}`}</strong><small>${entry.score.toLocaleString('ko-KR')} SCORE</small>`
+        : `<strong>${entry.score.toLocaleString('ko-KR')}</strong><small>${entry.bombs ?? 0} BOMBS · ${this.formatElapsedTime(entry.duration)}</small>`;
+      const badge = document.createElement('i');
+      badge.textContent = entry.completedAt === currentCompletedAt ? 'NEW' : '';
+      row.append(place, detail, badge);
+      this.hud.leaderboardList.append(row);
+    });
   }
 
   private resetPlayer(): void {
@@ -2117,7 +2235,8 @@ export class Game {
           this.hud.menu.classList.add('hidden');
         }
         this.stats.score = this.nextStageScore;
-        this.enterUpgradeSelection();
+        if (this.gameMode === 'combat' && this.stage >= CONFIG.combatFinalStage) this.beginCombatEnding();
+        else this.enterUpgradeSelection();
       }
       if (event.code === 'KeyR' && document.pointerLockElement === this.renderer.domElement) this.beginRun();
     });
@@ -2151,12 +2270,33 @@ export class Game {
       this.requestPlayLock();
     });
     this.hud.modeCards.forEach((card) => {
-      card.addEventListener('click', () => {
+      const openConfirmation = (): void => {
         const selectedMode = card.dataset.gameMode;
-        if (
-          this.mode === 'ready'
-          && (selectedMode === 'combat' || selectedMode === 'time-attack')
-        ) this.selectGameMode(selectedMode);
+        if (this.mode !== 'ready' || !this.isGameMode(selectedMode)) return;
+        this.previewModeSelection(selectedMode);
+      };
+      card.addEventListener('click', (event) => {
+        if ((event.target as HTMLElement).closest('button')) return;
+        openConfirmation();
+      });
+      card.addEventListener('keydown', (event) => {
+        if ((event.key === 'Enter' || event.key === ' ') && !(event.target as HTMLElement).closest('button')) {
+          event.preventDefault();
+          openConfirmation();
+        }
+      });
+      card.querySelector<HTMLButtonElement>('.mode-confirm-button')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const selectedMode = card.dataset.gameMode;
+        if (!this.isGameMode(selectedMode)) return;
+        this.selectGameMode(selectedMode);
+        this.audio.resume();
+        this.beginRun();
+        this.requestPlayLock();
+      });
+      card.querySelector<HTMLButtonElement>('.mode-cancel-button')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.closeModeConfirmations();
       });
     });
     this.hud.helpButton.addEventListener('click', () => {
@@ -2171,17 +2311,27 @@ export class Game {
     });
     this.hud.resultMenuButton.addEventListener('click', () => this.showModeMenu());
     this.hud.itemCards.forEach((card, index) => {
-      card.addEventListener('click', () => this.previewUpgradeSelection(index));
-    });
-    this.hud.upgradeReplaceCheck.addEventListener('change', () => {
-      const offer = this.selectedUpgradeIndex === null
-        ? undefined
-        : this.upgradeOffers[this.selectedUpgradeIndex];
-      this.hud.upgradeConfirmButton.disabled = Boolean(offer?.replacedItem)
-        && !this.hud.upgradeReplaceCheck.checked;
-    });
-    this.hud.upgradeConfirmButton.addEventListener('click', () => {
-      if (this.selectedUpgradeIndex !== null) this.selectUpgrade(this.selectedUpgradeIndex);
+      const openConfirmation = (): void => {
+        if (card.getAttribute('aria-disabled') !== 'true') this.previewUpgradeSelection(index);
+      };
+      card.addEventListener('click', (event) => {
+        if ((event.target as HTMLElement).closest('button')) return;
+        openConfirmation();
+      });
+      card.addEventListener('keydown', (event) => {
+        if ((event.key === 'Enter' || event.key === ' ') && !(event.target as HTMLElement).closest('button')) {
+          event.preventDefault();
+          openConfirmation();
+        }
+      });
+      card.querySelector<HTMLButtonElement>('.item-confirm-apply')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (this.selectedUpgradeIndex === index) this.selectUpgrade(index);
+      });
+      card.querySelector<HTMLButtonElement>('.item-confirm-cancel')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.cancelUpgradeSelection(index);
+      });
     });
 
     if (this.touchControlsEnabled) this.bindTouchControls();
@@ -2609,7 +2759,9 @@ export class Game {
     );
     this.hud.stage.textContent = this.gameMode === 'time-attack'
       ? `TIME ATTACK // ${this.bombsDestroyed} BOMBS`
-      : `STAGE ${String(this.stage).padStart(2, '0')}`;
+      : this.gameMode === 'endless'
+        ? `ENDLESS PRACTICE // ${this.bombsDestroyed} BOMBS`
+        : `STAGE ${String(this.stage).padStart(2, '0')}`;
     const healthRatio = clamp(this.health / Math.max(1, this.maxHealth), 0, 1);
     this.hud.healthFill.style.transform = `scaleX(${healthRatio})`;
     this.hud.healthValue.textContent = `${Math.ceil(this.health)} / ${Math.round(this.maxHealth)}`;
@@ -2789,7 +2941,7 @@ export class Game {
       helpButton: requiredElement<HTMLButtonElement>('helpButton'),
       helpCloseButton: requiredElement<HTMLButtonElement>('helpCloseButton'),
       helpDialog: requiredElement('helpDialog'),
-      modeCards: Array.from(document.querySelectorAll<HTMLButtonElement>('.mode-card')),
+      modeCards: Array.from(document.querySelectorAll<HTMLElement>('.mode-card')),
       bestScore: requiredElement('bestScore'),
       results: requiredElement('resultsScreen'),
       resultScore: requiredElement('resultScore'),
@@ -2800,21 +2952,17 @@ export class Game {
       resultSpeed: requiredElement('resultSpeed'),
       resultFalls: requiredElement('resultFalls'),
       resultTime: requiredElement('resultTime'),
+      leaderboardPanel: requiredElement('leaderboardPanel'),
+      leaderboardTitle: requiredElement('leaderboardTitle'),
+      leaderboardList: requiredElement('leaderboardList'),
+      combatEndingScreen: requiredElement('combatEndingScreen'),
       recordLabel: requiredElement('recordLabel'),
       replayButton: requiredElement<HTMLButtonElement>('replayButton'),
       resultMenuButton: requiredElement<HTMLButtonElement>('resultMenuButton'),
       upgradeScreen: requiredElement('upgradeScreen'),
       upgradeStage: requiredElement('upgradeStageValue'),
       upgradeReels: requiredElement('upgradeReels'),
-      itemCards: Array.from(document.querySelectorAll<HTMLButtonElement>('.item-card')),
-      upgradeConfirmBar: requiredElement('upgradeConfirmBar'),
-      upgradeConfirmEyebrow: requiredElement('upgradeConfirmEyebrow'),
-      upgradeConfirmName: requiredElement('upgradeConfirmName'),
-      upgradeConfirmSummary: requiredElement('upgradeConfirmSummary'),
-      upgradeReplaceWarning: requiredElement('upgradeReplaceWarning'),
-      upgradeReplaceCheck: requiredElement<HTMLInputElement>('upgradeReplaceCheck'),
-      upgradeReplaceText: requiredElement('upgradeReplaceText'),
-      upgradeConfirmButton: requiredElement<HTMLButtonElement>('upgradeConfirmButton'),
+      itemCards: Array.from(document.querySelectorAll<HTMLElement>('.item-card')),
     };
   }
 
@@ -2825,9 +2973,11 @@ export class Game {
       const timeAttack = Number(localStorage.getItem('super-swing-best-time-attack') ?? '0');
       this.bestScores.combat = Number.isFinite(combat) ? combat : 0;
       this.bestScores['time-attack'] = Number.isFinite(timeAttack) ? timeAttack : 0;
+      this.bestScores.endless = 0;
     } catch {
       this.bestScores.combat = 0;
       this.bestScores['time-attack'] = 0;
+      this.bestScores.endless = 0;
     }
     this.bestScore = this.bestScores[this.gameMode];
     this.hud.bestScore.textContent = this.bestScore.toLocaleString('ko-KR');
@@ -2840,17 +2990,43 @@ export class Game {
     this.hud.bestScore.textContent = this.bestScore.toLocaleString('ko-KR');
     this.hud.menuEyebrow.textContent = mode === 'time-attack'
       ? '90 SECOND BOMB RUSH PROTOCOL'
-      : 'ENDLESS ROGUE FLIGHT PROTOCOL';
+      : mode === 'endless'
+        ? 'UNLIMITED PRACTICE PROTOCOL'
+        : '10 STAGE ROGUE COMBAT PROTOCOL';
     this.hud.menuTagline.textContent = mode === 'time-attack'
       ? '전투와 아이템은 없다. 90초 동안 스윙과 조준만으로 최고 기록에 도전하라.'
-      : '에너지를 회수하고 장비를 조립하며, 스테이지 10 너머까지 로봇 군단을 돌파하라.';
-    this.hud.menuButton.textContent = mode === 'time-attack' ? '타임어택 출격' : '전투 모드 출격';
+      : mode === 'endless'
+        ? '시간과 전투 없이 스윙, 부스트, 폭탄 조준을 원하는 만큼 연습하라.'
+        : '에너지를 회수하고 장비를 조립하며, 스테이지 10의 엔딩까지 로봇 군단을 돌파하라.';
+    this.hud.menuButton.textContent = mode === 'time-attack'
+      ? '타임어택 출격'
+      : mode === 'endless'
+        ? '무한 연습 시작'
+        : '전투 모드 출격';
     for (const card of this.hud.modeCards) {
       const selected = card.dataset.gameMode === mode;
       card.classList.toggle('selected', selected);
       card.setAttribute('aria-checked', String(selected));
-      const selectLabel = card.querySelector<HTMLElement>('.mode-select');
-      if (selectLabel) selectLabel.textContent = selected ? 'SELECTED' : 'SELECT';
+    }
+  }
+
+  private isGameMode(value: string | undefined): value is GameMode {
+    return value === 'combat' || value === 'time-attack' || value === 'endless';
+  }
+
+  private previewModeSelection(mode: GameMode): void {
+    this.selectGameMode(mode);
+    for (const card of this.hud.modeCards) {
+      const confirming = card.dataset.gameMode === mode;
+      card.classList.toggle('confirming', confirming);
+      card.querySelector('.mode-card-confirm')?.classList.toggle('hidden', !confirming);
+    }
+  }
+
+  private closeModeConfirmations(): void {
+    for (const card of this.hud.modeCards) {
+      card.classList.remove('confirming');
+      card.querySelector('.mode-card-confirm')?.classList.add('hidden');
     }
   }
 
@@ -2859,7 +3035,9 @@ export class Game {
     this.audio.resetRunEndCue();
     this.audio.setPaused(true);
     this.hud.results.classList.add('hidden');
+    this.hud.combatEndingScreen.classList.add('hidden');
     this.hud.helpDialog.classList.add('hidden');
+    this.closeModeConfirmations();
     this.hud.menuPanel.classList.remove('pause-state');
     this.hud.menuTitle.className = 'super-logo';
     this.hud.menuTitle.setAttribute('aria-label', 'SUPER SWING');

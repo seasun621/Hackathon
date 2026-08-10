@@ -104,26 +104,47 @@ root.innerHTML = `
         <span class="super-logo-word swing" data-text="SWING">SWING</span>
         <i class="super-logo-slash"></i>
       </h1>
-      <p id="menuTagline" class="tagline">두 개의 비행 규칙. 하나의 완벽한 스윙.</p>
+      <p id="menuTagline" class="tagline">세 개의 비행 규칙. 하나의 완벽한 스윙.</p>
       <div id="modePicker" class="mode-picker" role="radiogroup" aria-label="게임 모드 선택">
-        <button class="mode-card" type="button" data-game-mode="time-attack" role="radio" aria-checked="false">
+        <article class="mode-card" data-game-mode="time-attack" role="radio" tabindex="0" aria-checked="false">
           <span class="mode-number">01</span>
           <span class="mode-icon timer-icon" aria-hidden="true"><i></i></span>
           <span class="mode-kicker">90 SEC BOMB RUSH</span>
           <strong>타임어택</strong>
           <p>전투와 아이템 없이 오직 스윙과 조준으로 90초 동안 최대한 많은 폭탄을 파괴하세요.</p>
           <span class="mode-features"><b>90초 제한</b><b>폭탄 사냥</b><b>순수 스코어</b></span>
-          <span class="mode-select">SELECT</span>
-        </button>
-        <button class="mode-card selected" type="button" data-game-mode="combat" role="radio" aria-checked="true">
+          <div class="mode-card-confirm hidden">
+            <span>90 SEC PROTOCOL</span><strong>타임어택 출격</strong>
+            <p>90초 기록 도전을 시작할까요?</p>
+            <div><button class="mode-confirm-button" type="button">출격</button><button class="mode-cancel-button" type="button">취소</button></div>
+          </div>
+        </article>
+        <article class="mode-card selected" data-game-mode="combat" role="radio" tabindex="0" aria-checked="true">
           <span class="mode-number">02</span>
           <span class="mode-icon combat-icon" aria-hidden="true"><i></i><i></i></span>
           <span class="mode-kicker">ENDLESS ROGUE FLIGHT</span>
           <strong>전투</strong>
           <p>스코어 게이트를 돌파하고 장비를 강화하며, 점점 거세지는 로봇 군단과 싸우세요.</p>
-          <span class="mode-features"><b>10+ 스테이지</b><b>랜덤 장비</b><b>적 증원</b></span>
-          <span class="mode-select">SELECTED</span>
-        </button>
+          <span class="mode-features"><b>10 스테이지</b><b>랜덤 장비</b><b>전용 엔딩</b></span>
+          <div class="mode-card-confirm hidden">
+            <span>ROGUE COMBAT PROTOCOL</span><strong>전투 모드 출격</strong>
+            <p>스테이지 10의 엔딩까지 돌파할까요?</p>
+            <div><button class="mode-confirm-button" type="button">출격</button><button class="mode-cancel-button" type="button">취소</button></div>
+          </div>
+        </article>
+        <article class="mode-card" data-game-mode="endless" role="radio" tabindex="0" aria-checked="false">
+          <span class="mode-number">03</span>
+          <span class="mode-icon endless-icon" aria-hidden="true">∞</span>
+          <span class="mode-kicker">UNLIMITED PRACTICE</span>
+          <strong>무한 연습</strong>
+          <p>타임어택과 같은 폭탄 사냥을 시간 제한 없이 자유롭게 연습하세요.</p>
+          <span class="mode-features"><b>시간 무제한</b><b>전투 없음</b><b>연습장</b></span>
+          <div class="mode-card-confirm hidden">
+            <span>FREE FLIGHT PROTOCOL</span><strong>무한 연습 시작</strong>
+            <p>기록 부담 없이 도시에 진입할까요?</p>
+            <div><button class="mode-confirm-button" type="button">시작</button><button class="mode-cancel-button" type="button">취소</button></div>
+          </div>
+        </article>
       </div>
       <div id="helpDialog" class="help-dialog hidden" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
         <div class="help-dialog-head">
@@ -163,7 +184,7 @@ root.innerHTML = `
       <p class="upgrade-instruction">세 개의 슬롯 중 하나를 선택해야 비행이 재개됩니다.</p>
       <div id="upgradeReels" class="upgrade-reels rolling">
         ${[0, 1, 2].map((index) => `
-          <button class="item-card" type="button" data-offer-index="${index}">
+          <article class="item-card" tabindex="0" role="button" data-offer-index="${index}">
             <div class="item-slot-lines"></div>
             <div class="item-card-top"><span class="item-category">PASSIVE</span><b class="item-status">NEW</b></div>
             <div id="itemPreview${index}" class="item-preview"></div>
@@ -172,42 +193,57 @@ root.innerHTML = `
             <p class="item-description">GEAR DATA ACQUISITION</p>
             <div class="item-stats"></div>
             <span class="item-replace"></span>
-          </button>
+            <div class="item-card-confirm hidden">
+              <span class="item-confirm-kicker">GEAR CHOICE</span>
+              <strong class="item-confirm-name">SELECT GEAR</strong>
+              <p class="item-confirm-warning">이 장비를 선택할까요?</p>
+              <div class="item-confirm-actions">
+                <button class="item-confirm-apply" type="button">장착</button>
+                <button class="item-confirm-cancel" type="button">다시 선택</button>
+              </div>
+            </div>
+          </article>
         `).join('')}
-      </div>
-      <div id="upgradeConfirmBar" class="upgrade-confirm-bar hidden">
-        <div class="upgrade-confirm-copy">
-          <span id="upgradeConfirmEyebrow">GEAR SELECTED</span>
-          <strong id="upgradeConfirmName">SELECT A CARD</strong>
-          <p id="upgradeConfirmSummary">Confirm the selected upgrade before returning to flight.</p>
-        </div>
-        <label id="upgradeReplaceWarning" class="upgrade-replace-warning hidden">
-          <input id="upgradeReplaceCheck" type="checkbox">
-          <span><b>REPLACEMENT WARNING</b><em id="upgradeReplaceText"></em></span>
-        </label>
-        <button id="upgradeConfirmButton" type="button" disabled>CONFIRM LOADOUT</button>
       </div>
       <div class="upgrade-footer">PASSIVE <i></i> ATTACK <i></i> EQUIPMENT</div>
     </div>
   </section>
 
   <section id="resultsScreen" class="screen hidden">
-    <div class="panel">
+    <div class="panel result-panel">
       <div id="resultEyebrow" class="eyebrow">COMBAT RUN COMPLETE</div>
       <h2 class="result-logo">SUPER SWING // RESULT</h2>
       <div id="recordLabel" class="eyebrow">BEST 0</div>
-      <div class="results-grid">
-        <div class="result"><span id="resultScoreLabel" class="metric-label">SCORE</span><strong id="resultScore">0</strong></div>
-        <div class="result"><span class="metric-label">ACCURACY</span><strong id="resultAccuracy">0%</strong></div>
-        <div class="result"><span class="metric-label">BEST FLOW</span><strong id="resultCombo">x0</strong></div>
-        <div class="result"><span class="metric-label">TOP SPEED</span><strong id="resultSpeed">0 km/h</strong></div>
-        <div class="result"><span class="metric-label">FALLS</span><strong id="resultFalls">0</strong></div>
-        <div class="result"><span class="metric-label">TIME</span><strong id="resultTime">00:00</strong></div>
+      <div class="result-layout">
+        <div>
+          <div class="results-grid">
+            <div class="result"><span id="resultScoreLabel" class="metric-label">SCORE</span><strong id="resultScore">0</strong></div>
+            <div class="result"><span class="metric-label">ACCURACY</span><strong id="resultAccuracy">0%</strong></div>
+            <div class="result"><span class="metric-label">BEST FLOW</span><strong id="resultCombo">x0</strong></div>
+            <div class="result"><span class="metric-label">TOP SPEED</span><strong id="resultSpeed">0 km/h</strong></div>
+            <div class="result"><span class="metric-label">FALLS</span><strong id="resultFalls">0</strong></div>
+            <div class="result"><span class="metric-label">TIME</span><strong id="resultTime">00:00</strong></div>
+          </div>
+          <div class="result-actions">
+            <button id="replayButton" type="button">같은 모드 재도전</button>
+            <button id="resultMenuButton" class="secondary-button" type="button">모드 선택</button>
+          </div>
+        </div>
+        <aside id="leaderboardPanel" class="leaderboard-panel">
+          <span>LOCAL PERSONAL RECORDS</span>
+          <h3 id="leaderboardTitle">전투 개인 랭킹</h3>
+          <div id="leaderboardList" class="leaderboard-list"></div>
+        </aside>
       </div>
-      <div class="result-actions">
-        <button id="replayButton" type="button">같은 모드 재도전</button>
-        <button id="resultMenuButton" class="secondary-button" type="button">모드 선택</button>
-      </div>
+    </div>
+  </section>
+
+  <section id="combatEndingScreen" class="screen combat-ending-screen hidden">
+    <div class="combat-ending-lines"></div>
+    <div class="combat-ending-copy">
+      <span>FINAL SCORE GATE CLEARED</span>
+      <strong>CITY<br>LIBERATED</strong>
+      <p>STAGE 10 COMPLETE // SUPER SWING</p>
     </div>
   </section>
 `;

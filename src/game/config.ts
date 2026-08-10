@@ -63,13 +63,14 @@ export const CONFIG = {
   pickupCollectionRadiusGold: 10,
   pickupNormalScore: 65,
   pickupGoldScore: 190,
-  healthPackCount: 3,
-  healthPackSpawnChance: 0.18,
+  healthPackCount: 6,
+  healthPackSpawnChance: 0.42,
   healthPackTrackRange: 175,
   healthPackHealGraze: 16,
   healthPackHealPerfect: 32,
   stageScoreBase: 12000,
   stageScoreGrowth: 6000,
+  combatFinalStage: 10,
   stageTransitionDuration: 3,
   playerBaseHealth: 100,
   combatTrackRange: 190,
@@ -82,8 +83,8 @@ export const CONFIG = {
   droneBulletDamage: 7,
 } as const;
 
-export type RunMode = 'ready' | 'playing' | 'paused' | 'upgrade' | 'over';
-export type GameMode = 'time-attack' | 'combat';
+export type RunMode = 'ready' | 'playing' | 'paused' | 'upgrade' | 'ending' | 'over';
+export type GameMode = 'time-attack' | 'combat' | 'endless';
 export type TargetKind = 'normal' | 'gold' | 'bomb' | 'health';
 
 export interface RunStats {
