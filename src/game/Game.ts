@@ -68,6 +68,7 @@ interface HudElements {
   menuTitle: HTMLElement;
   menuTagline: HTMLElement;
   menuButton: HTMLButtonElement;
+  pauseRestartButton: HTMLButtonElement;
   helpButton: HTMLButtonElement;
   helpCloseButton: HTMLButtonElement;
   helpDialog: HTMLElement;
@@ -2397,6 +2398,14 @@ export class Game {
       if (this.mode === 'ready') this.beginRun();
       this.requestPlayLock();
     });
+    this.hud.pauseRestartButton.addEventListener('click', () => {
+      this.resetTouchControls();
+      this.keys.clear();
+      this.leftHeld = false;
+      this.rightHeld = false;
+      this.detach();
+      this.showModeMenu();
+    });
     this.hud.modeCards.forEach((card) => {
       const openConfirmation = (): void => {
         const selectedMode = card.dataset.gameMode;
@@ -2869,7 +2878,16 @@ export class Game {
     const pointsElement = this.hud.toast.querySelector<HTMLElement>('.toast-points');
     const detailElement = this.hud.toast.querySelector<HTMLElement>('.toast-detail');
     if (badgeElement) badgeElement.textContent = badge;
-    if (pointsElement) pointsElement.textContent = primary;
+    if (pointsElement) {
+      const sign = primary.startsWith('+') || primary.startsWith('-') ? primary[0] : '';
+      pointsElement.textContent = sign ? primary.slice(1) : primary;
+      if (sign) {
+        const signElement = document.createElement('span');
+        signElement.className = 'toast-sign';
+        signElement.textContent = sign;
+        pointsElement.prepend(signElement);
+      }
+    }
     if (detailElement) detailElement.textContent = detail;
     this.hud.toast.classList.remove('show', 'positive', 'negative', 'bomb', 'boost');
     this.hud.hitFlash.classList.remove('show', 'positive', 'negative', 'bomb');
@@ -3092,6 +3110,7 @@ export class Game {
       menuTitle: requiredElement('menuTitle'),
       menuTagline: requiredElement('menuTagline'),
       menuButton: requiredElement<HTMLButtonElement>('menuButton'),
+      pauseRestartButton: requiredElement<HTMLButtonElement>('pauseRestartButton'),
       helpButton: requiredElement<HTMLButtonElement>('helpButton'),
       helpCloseButton: requiredElement<HTMLButtonElement>('helpCloseButton'),
       helpDialog: requiredElement('helpDialog'),

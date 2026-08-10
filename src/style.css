@@ -25,12 +25,26 @@
   color: #f4f7ff;
   background: #070913;
   font-synthesis: none;
-  --cyan: #4ef6ff;
-  --pink: #ff3d93;
-  --gold: #ffd34e;
-  --orange: #ff7b2f;
-  --ink: #07101e;
-  --panel: rgba(9, 12, 28, 0.72);
+  --cyan: #7784d8;
+  --pink: #c75f9f;
+  --gold: #57c889;
+  --orange: #c75f9f;
+  --ink: #0b1020;
+  --panel: rgba(27, 33, 53, .95);
+  --ui-canvas: #101426;
+  --ui-surface: #1b2135;
+  --ui-surface-raised: #242b42;
+  --ui-primary: #6875cf;
+  --ui-positive: #57c889;
+  --ui-danger: #c75f9f;
+  --ui-info: #4da3c7;
+}
+
+@font-face {
+  font-family: 'Wonju UI';
+  src: url('../fonts/kbl/cts_6554_file03/원주체 Regular.otf') format('opentype');
+  font-weight: 400;
+  font-display: swap;
 }
 
 * { box-sizing: border-box; }
@@ -2437,3 +2451,649 @@ html[data-game-mode='endless'] .stage-value { color: #05131d; background: #b5ff5
   .result-layout { grid-template-columns: 1fr; }
   .leaderboard-panel { margin-top: 0; }
 }
+/* Game-native dark theme: restrained accents, soft geometry, flat depth. */
+.screen,
+.upgrade-screen {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(104, 117, 207, .2), transparent 34%),
+    radial-gradient(circle at 85% 86%, rgba(199, 95, 159, .09), transparent 32%),
+    rgba(16, 20, 38, .94);
+}
+
+.panel,
+.upgrade-panel {
+  border: 1px solid rgba(145, 154, 220, .22);
+  border-top: 1px solid rgba(145, 154, 220, .22);
+  border-radius: 24px;
+  background: rgba(27, 33, 53, .98);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .3);
+  clip-path: none;
+  transform: none;
+}
+
+.menu-panel {
+  background:
+    radial-gradient(circle at 8% 0, rgba(104, 117, 207, .15), transparent 35%),
+    var(--ui-surface);
+}
+
+.super-logo {
+  color: #fff;
+  font-style: normal;
+  filter: none;
+}
+.super-logo-word.swing { color: #aeb4ff; }
+.super-logo-slash {
+  border-radius: 999px;
+  background: var(--ui-primary);
+}
+
+.menu-panel > .tagline { color: #c8cbe3; font-weight: 500; }
+
+button.mode-card {
+  border: 1px solid rgba(155, 163, 214, .2);
+  border-left: 1px solid rgba(155, 163, 214, .2);
+  border-radius: 16px;
+  background: rgba(16, 20, 38, .58);
+}
+
+button.mode-card:hover {
+  border-color: rgba(174, 180, 255, .48);
+  background: rgba(38, 44, 102, .9);
+}
+
+button.mode-card.selected {
+  border: 2px solid #7c87ff;
+  background: linear-gradient(135deg, rgba(104, 117, 207, .25), rgba(27, 33, 53, .98));
+  box-shadow: none;
+}
+
+.mode-card.selected .mode-icon {
+  color: #9ca5ff;
+  filter: none;
+}
+
+.mode-card > p { color: #d6d8e9; font-weight: 500; }
+.mode-number { color: rgba(255, 255, 255, .1); }
+
+.mode-select {
+  color: #d8daeb;
+  background: rgba(104, 117, 207, .2);
+  border-radius: 12px;
+}
+
+.mode-card.selected .mode-select {
+  color: #fff;
+  background: var(--ui-primary);
+}
+
+.menu-panel .actions #menuButton,
+.upgrade-confirm-button,
+.result-actions button {
+  color: #fff;
+  background: var(--ui-primary);
+  border-radius: 12px;
+}
+
+.menu-panel .actions #menuButton {
+  color: #07150d;
+  background: var(--ui-positive);
+}
+
+button.secondary-button {
+  color: #fff;
+  background: rgba(104, 117, 207, .22);
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.best { color: #b8bbd1; }
+.best strong { color: var(--ui-positive); }
+
+.help-button,
+.help-dialog-head button {
+  color: #fff;
+  background: rgba(104, 117, 207, .2);
+  border: 1px solid rgba(174, 180, 255, .36);
+  border-radius: 12px;
+}
+
+.help-dialog {
+  border: 1px solid rgba(124, 135, 255, .42);
+  border-radius: 20px;
+  background: rgba(20, 24, 66, .99);
+  box-shadow: 0 20px 64px rgba(0, 0, 0, .34);
+  clip-path: none;
+}
+
+.item-card {
+  border: 1px solid color-mix(in srgb, var(--item-color) 32%, #42486e);
+  border-top: 1px solid color-mix(in srgb, var(--item-color) 32%, #42486e);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--item-color) 6%, var(--ui-surface));
+  box-shadow: none;
+  clip-path: none;
+  text-shadow: none;
+}
+
+.item-card:hover,
+.item-card.selected {
+  transform: translateY(-3px);
+  outline: none;
+  border: 2px solid var(--item-color);
+  filter: none;
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--item-color) 18%, transparent);
+}
+
+.item-slot-lines { display: none; }
+.item-status { border-radius: 12px; filter: none; rotate: 0deg; }
+.status-new .item-status,
+.status-upgrade .item-status,
+.status-consume .item-status {
+  width: auto;
+  height: auto;
+  padding: 7px 11px;
+  clip-path: none;
+  rotate: 0deg;
+}
+
+.item-stat-box {
+  border-left: 0;
+  border-radius: 8px;
+  background: rgba(16, 20, 38, .52);
+}
+
+.item-card.category-passive,
+.inventory-item.category-passive { --item-color: #57c889 !important; }
+.item-card.category-attack,
+.inventory-item.category-attack { --item-color: #c75f9f !important; }
+.item-card.category-equipment,
+.inventory-item.category-equipment { --item-color: #4da3c7 !important; }
+
+.upgrade-confirm-bar {
+  border: 1px solid rgba(124, 135, 255, .35);
+  border-radius: 14px;
+  background: rgba(16, 20, 38, .72);
+  box-shadow: none;
+  clip-path: none;
+}
+
+.results-grid {
+  gap: 10px;
+  background: transparent;
+}
+.result {
+  border-radius: 12px;
+  background: rgba(16, 20, 38, .6);
+}
+
+kbd {
+  border: 1px solid rgba(174, 180, 255, .35);
+  border-radius: 8px;
+  background: rgba(104, 117, 207, .15);
+  transform: none;
+}
+
+.toast,
+.item-proc {
+  border-radius: 14px;
+  background: rgba(27, 33, 53, .95);
+}
+
+@media (max-width: 760px) {
+  .panel,
+  .upgrade-panel { border-radius: 18px; }
+  button.mode-card { border-radius: 14px; }
+}
+
+/* Hard-surface UI language: containers stay angular; functional circles remain circular. */
+.panel,
+.upgrade-panel,
+button.mode-card,
+.mode-select,
+.menu-panel .actions #menuButton,
+.upgrade-confirm-button,
+.result-actions button,
+button.secondary-button,
+.help-button,
+.help-dialog,
+.help-dialog-head button,
+.item-card,
+.item-status,
+.status-new .item-status,
+.status-upgrade .item-status,
+.status-consume .item-status,
+.item-stat-box,
+.upgrade-confirm-bar,
+.result,
+kbd,
+.toast,
+.item-proc,
+.inventory-item,
+.player-stats,
+.mobile-control-hint,
+.upgrade-replace-warning {
+  border-radius: 0;
+}
+
+button.mode-card {
+  border-left-width: 5px;
+}
+
+button.mode-card.selected {
+  border-left-color: var(--ui-primary);
+}
+
+.mode-select,
+.item-status,
+.upgrade-confirm-bar,
+.result {
+  box-shadow: none;
+}
+
+@media (max-width: 760px) {
+  .panel,
+  .upgrade-panel,
+  button.mode-card { border-radius: 0; }
+}
+
+/* Readable copy uses the connected Wonju typeface; display and actions keep KBL Court. */
+body,
+.tagline,
+.mode-card > p,
+.controls,
+.mobile-control-hint span,
+.upgrade-instruction,
+.item-description,
+.upgrade-confirm-copy > p,
+.upgrade-replace-warning,
+.item-replace,
+.result span,
+.metric-label,
+.toast span,
+.item-proc em,
+.drone-lock-label,
+.bomb-lock-label {
+  font-family: 'Wonju UI', 'KBL Jump', sans-serif;
+  font-style: normal;
+  letter-spacing: 0;
+}
+
+.tagline,
+.mode-card > p,
+.upgrade-instruction,
+.item-description,
+.upgrade-confirm-copy > p {
+  font-weight: 400;
+  word-break: keep-all;
+}
+
+.pause-restart { display: none; }
+.menu-panel.pause-state .pause-restart { display: inline-flex; align-items: center; justify-content: center; }
+.menu-panel.pause-state .actions { flex-wrap: wrap; }
+.menu-panel.pause-state .actions #menuButton,
+.menu-panel.pause-state .actions .pause-restart { min-width: 220px; }
+
+/* Directional parallelogram silhouette without skewing readable content. */
+.panel,
+.upgrade-panel,
+.help-dialog {
+  clip-path: polygon(22px 0, 100% 0, calc(100% - 22px) 100%, 0 100%);
+}
+
+button.mode-card,
+.item-card,
+.result,
+.upgrade-confirm-bar,
+.upgrade-replace-warning,
+.mobile-control-hint,
+.inventory-item,
+.player-stats,
+.toast,
+.item-proc {
+  clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+}
+
+.menu-panel .actions #menuButton,
+.menu-panel .actions .pause-restart,
+.upgrade-confirm-button,
+.result-actions button,
+button.secondary-button,
+.mode-select,
+.item-status,
+.help-button,
+.help-dialog-head button,
+kbd {
+  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+}
+
+button.mode-card,
+.item-card {
+  border-left-width: 1px;
+  box-shadow: inset 5px 0 0 color-mix(in srgb, var(--cyan) 58%, transparent);
+}
+
+button.mode-card.selected {
+  box-shadow: inset 7px 0 0 var(--ui-primary);
+}
+
+.item-card:hover,
+.item-card.selected {
+  box-shadow:
+    inset 7px 0 0 var(--item-color),
+    0 8px 28px color-mix(in srgb, var(--item-color) 18%, transparent);
+}
+
+.result,
+.upgrade-confirm-bar,
+.mobile-control-hint,
+.player-stats {
+  border-left: 4px solid var(--ui-primary);
+}
+
+@media (max-width: 760px) {
+  .panel,
+  .upgrade-panel,
+  .help-dialog {
+    clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+  }
+
+  button.mode-card,
+  .item-card,
+  .result {
+    clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  }
+}
+
+/* Unified, readability-first interface */
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+.panel,
+.upgrade-panel {
+  color: #f4f9fc;
+  background:
+    linear-gradient(135deg, rgba(7, 17, 31, .985), rgba(10, 27, 42, .97));
+  border: 1px solid rgba(130, 174, 198, .3);
+  border-top: 4px solid var(--cyan);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .55), inset 0 1px rgba(255, 255, 255, .04);
+}
+
+.menu-panel {
+  width: min(1080px, calc(100vw - 48px));
+  padding: 34px 40px 36px;
+}
+
+.menu-panel::after,
+.menu-panel > .eyebrow,
+.mode-kicker,
+.mode-features {
+  display: none;
+}
+
+.super-logo {
+  margin: 2px 0 12px;
+  font-size: clamp(54px, 7vw, 88px);
+  letter-spacing: -.045em;
+  filter: drop-shadow(0 8px 20px rgba(0, 0, 0, .45));
+  transform: none;
+}
+
+.super-logo-word::before,
+.super-logo-word::after {
+  display: none;
+}
+
+.super-logo-word.swing { color: var(--cyan); }
+.super-logo-slash {
+  height: 7px;
+  margin-left: 24px;
+  box-shadow: none;
+}
+
+.menu-panel > .tagline {
+  max-width: 720px;
+  margin: 0 0 26px;
+  color: #dce9ef;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.55;
+  letter-spacing: -.015em;
+  text-shadow: none;
+}
+
+.mode-picker { gap: 16px; }
+
+button.mode-card {
+  min-height: 222px;
+  padding: 28px 28px 58px 104px;
+  align-content: center;
+  border: 1px solid rgba(156, 187, 205, .3);
+  border-top: 1px solid rgba(156, 187, 205, .3);
+  border-left: 5px solid #536579;
+  clip-path: none;
+  background: rgba(12, 26, 42, .88);
+  border-radius: 3px;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+button.mode-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(208, 229, 240, .55);
+  filter: none;
+}
+
+button.mode-card.selected {
+  border-color: rgba(78, 246, 255, .72);
+  border-left-color: var(--cyan);
+  background: linear-gradient(120deg, rgba(12, 35, 51, .98), rgba(11, 49, 61, .9));
+  box-shadow: inset 0 0 40px rgba(78, 246, 255, .07);
+}
+
+.mode-icon {
+  position: absolute;
+  left: 28px;
+  top: 50%;
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  translate: 0 -50%;
+  color: #8294a6;
+}
+
+.mode-number {
+  top: 18px;
+  right: 20px;
+  color: rgba(213, 232, 242, .12);
+  font-size: 42px;
+}
+
+.mode-card > strong {
+  margin: 0 0 9px;
+  color: #fff;
+  font: 900 32px/1.1 'KBL Court', sans-serif;
+  letter-spacing: -.035em;
+  text-shadow: none;
+}
+
+.mode-card > p {
+  max-width: 94%;
+  margin: 0;
+  color: #d5e2e9;
+  font: 700 16px/1.58 'KBL Jump', sans-serif;
+  letter-spacing: -.02em;
+  text-shadow: none;
+}
+
+.mode-select {
+  right: 18px;
+  bottom: 16px;
+  min-width: 108px;
+  padding: 9px 16px 8px;
+  color: #d0dae1;
+  background: #29384a;
+  border-radius: 2px;
+  font: 900 14px 'KBL Jump', sans-serif;
+  text-align: center;
+}
+
+.mode-card.selected .mode-select {
+  color: #04121c;
+  background: var(--cyan);
+}
+
+.menu-panel .actions {
+  margin-top: 24px;
+  gap: 20px;
+}
+
+.menu-panel .actions #menuButton,
+.upgrade-confirm-button,
+.result-actions button {
+  min-height: 52px;
+  padding: 13px 28px;
+  color: #06121c;
+  background: var(--cyan);
+  box-shadow: none;
+  clip-path: none;
+  border-radius: 2px;
+  font-family: 'KBL Court', sans-serif;
+}
+
+.best {
+  color: #c0ccd4;
+  font-size: 12px;
+  line-height: 1.2;
+  text-shadow: none;
+}
+.best strong { color: var(--gold); font-size: 20px; }
+
+.help-button {
+  border: 1px solid rgba(190, 216, 230, .5);
+  box-shadow: none;
+  border-radius: 2px;
+}
+
+@media (max-width: 760px) {
+  .menu-panel { padding: 24px 22px 26px; }
+  .menu-panel > .tagline { font-size: 15px; margin-bottom: 18px; }
+  button.mode-card { min-height: 210px; padding: 24px 18px 54px 82px; }
+  .mode-icon { left: 20px; scale: .78; }
+  .mode-card > strong { font-size: 27px; }
+  .mode-card > p { font-size: 14px; line-height: 1.5; }
+}
+
+@media (max-width: 480px) and (orientation: portrait) {
+  .super-logo { font-size: clamp(40px, 12vw, 58px); }
+  .mode-picker { grid-template-columns: 1fr; }
+  button.mode-card { min-height: 146px; padding: 20px 16px 48px 76px; }
+  .mode-icon { top: 44%; left: 17px; }
+  .mode-card > p { font-size: 13px; }
+  .mode-select { right: 12px; bottom: 10px; padding-block: 7px; }
+}
+
+/* Final shape authority: no later legacy rule may square off directional controls. */
+.menu-panel .actions #menuButton,
+.menu-panel .actions .pause-restart,
+.upgrade-confirm-button,
+.result-actions button,
+button.secondary-button {
+  border: 0;
+  outline: 0;
+  border-radius: 0;
+  clip-path: polygon(12px 0, 100% 0, calc(100% - 12px) 100%, 0 100%);
+}
+
+.panel,
+.upgrade-panel,
+.help-dialog {
+  border-radius: 0;
+  clip-path: polygon(22px 0, 100% 0, calc(100% - 22px) 100%, 0 100%);
+}
+
+button.mode-card,
+.item-card,
+.result,
+.upgrade-confirm-bar,
+.upgrade-replace-warning,
+.mobile-control-hint,
+.inventory-item,
+.player-stats,
+.toast,
+.item-proc {
+  border-radius: 0;
+  clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+}
+
+/* Final typography authority for every explanatory/copy surface. */
+.menu-panel > .tagline,
+.mode-card > p,
+.controls,
+.controls > div,
+.mobile-control-hint span,
+.upgrade-instruction,
+.item-description,
+.upgrade-confirm-copy > p,
+.upgrade-replace-warning,
+.upgrade-replace-warning em,
+.item-replace,
+.result .metric-label,
+.toast span,
+.item-proc em,
+.drone-lock-label,
+.bomb-lock-label {
+  font-family: 'Wonju UI', 'KBL Jump', sans-serif !important;
+  font-style: normal !important;
+  font-weight: 400;
+  letter-spacing: 0;
+  word-break: keep-all;
+}
+
+.mode-card > p {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.combo::before { content: none; }
+
+.toast {
+  isolation: isolate;
+  overflow: visible;
+  background: transparent;
+  clip-path: none;
+}
+
+.toast::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background: rgba(27, 33, 53, .95);
+  clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+}
+
+.toast-badge,
+.toast-points,
+.toast-detail {
+  position: relative;
+  z-index: 1;
+}
+
+.toast-points { overflow: visible; }
+
+.toast .toast-sign {
+  position: absolute;
+  right: calc(100% + 2px);
+  top: 0;
+  z-index: 3;
+  color: inherit;
+  font: inherit !important;
+  line-height: inherit;
+  text-shadow: inherit;
+  -webkit-text-stroke: inherit;
+}
+
+/* Keep the score group comfortably inside its popup. */
+.toast-points { margin-left: 30px; }

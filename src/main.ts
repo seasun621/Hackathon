@@ -167,6 +167,7 @@ root.innerHTML = `
       </div>
       <div class="actions">
         <button id="menuButton" type="button">전투 모드 출격</button>
+        <button id="pauseRestartButton" class="secondary-button pause-restart" type="button">다시 시작하기</button>
         <div class="best">PERSONAL BEST<br><strong id="bestScore">0</strong></div>
       </div>
     </div>
