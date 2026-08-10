@@ -414,7 +414,25 @@ export class Game {
   }
 
   private stepPhysics(dt: number): void {
-    this.world.gravity.y = CONFIG.gravity * this.items.getGravityMultiplier(this.grappleAnchor !== null);
+    const verticalSpeed = this.playerBody.linvel().y;
+    // Preserve generous ascent time, then smoothly strengthen gravity after
+    // the apex so falling has readable speed without making jumps feel heavy.
+    const fallTransition = THREE.MathUtils.smoothstep(
+      2 - verticalSpeed,
+      0,
+      CONFIG.gravityTransitionSpeed,
+    );
+    const airborneGravityScale = THREE.MathUtils.lerp(
+      CONFIG.risingGravityScale,
+      CONFIG.fallingGravityScale,
+      fallTransition,
+    );
+    const motionGravityScale = this.grappleAnchor || this.isGrounded
+      ? 1
+      : airborneGravityScale;
+    this.world.gravity.y = CONFIG.gravity
+      * motionGravityScale
+      * this.items.getGravityMultiplier(this.grappleAnchor !== null);
     const wasGrounded = this.isGrounded;
     const preGroundVelocity = this.playerBody.linvel();
     if (!wasGrounded) this.peakFallSpeed = Math.max(this.peakFallSpeed, Math.max(0, -preGroundVelocity.y));

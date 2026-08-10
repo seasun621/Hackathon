@@ -1,5 +1,8 @@
 export const CONFIG = {
   gravity: -38,
+  risingGravityScale: 0.88,
+  fallingGravityScale: 1.32,
+  gravityTransitionSpeed: 8,
   airAcceleration: 13.5,
   walkSpeed: 9.4,
   groundAcceleration: 42,

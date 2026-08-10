@@ -25,6 +25,7 @@ interface CityChunk {
   centerX: number;
   centerZ: number;
   traffic: TrafficAnimation | null;
+  detailMeshes: THREE.Object3D[];
 }
 
 interface TrafficCar {
@@ -383,6 +384,12 @@ export class City {
     }
 
     for (const [key, chunk] of this.chunks) {
+      const detailDistance = Math.hypot(
+        chunk.centerX - playerPosition.x,
+        chunk.centerZ - playerPosition.z,
+      );
+      const showFineDetail = detailDistance < CONFIG.chunkSize * 1.72;
+      for (const mesh of chunk.detailMeshes) mesh.visible = showFineDetail;
       if (this.wantedChunks.has(key)) continue;
       this.removeChunk(key, chunk);
       break;
@@ -421,13 +428,14 @@ export class City {
         this.anchorDelta.copy(anchor).sub(playerPosition);
         const distance = this.anchorDelta.length();
         if (distance > CONFIG.ropeMaxRange || distance < 7) continue;
-        if (this.anchorDelta.dot(this.cameraDirection) <= 1) continue;
+        const forwardAlignment = this.anchorDelta.dot(this.cameraDirection) / distance;
+        if (forwardAlignment < 0.78) continue;
 
         this.projectedAnchor.copy(anchor).project(camera);
         if (this.projectedAnchor.z < -1 || this.projectedAnchor.z > 1) continue;
         const x = Math.abs(this.projectedAnchor.x);
         const y = Math.abs(this.projectedAnchor.y);
-        if (x > 0.58 || y > 0.52) continue;
+        if (x > 0.38 || y > 0.34) continue;
 
         const tooLowPenalty = anchor.y < playerPosition.y + 2 ? 0.48 : 0;
         const score = x * 1.25 + y + distance * 0.0024 + tooLowPenalty;
@@ -954,6 +962,14 @@ export class City {
         let upperColliderDepth = depth;
         let upperColliderOffsetX = 0;
         let upperColliderOffsetZ = 0;
+        let preciseColliderParts: Array<{
+          x: number;
+          z: number;
+          width: number;
+          height: number;
+          depth: number;
+          bottom: number;
+        }> | null = null;
         const facadeTint = facadeColor.clone().lerp(new THREE.Color(0xb8c2bf), 0.18);
 
         const addFacadeInstance = (
@@ -1315,6 +1331,25 @@ export class City {
               height,
               0.86,
             );
+            preciseColliderParts = [
+              { x, z, width, height, depth, bottom: 0 },
+              {
+                x: x + (splitAlongX ? -offset : 0),
+                z: z + (splitAlongX ? 0 : -offset),
+                width: towerWidth,
+                height: towerHeight,
+                depth: towerDepth,
+                bottom: height,
+              },
+              {
+                x: x + (splitAlongX ? offset : 0),
+                z: z + (splitAlongX ? 0 : offset),
+                width: towerWidth,
+                height: towerHeight * 0.88,
+                depth: towerDepth,
+                bottom: height,
+              },
+            ];
             roofHeight = targetHeight;
             tierWidth = splitAlongX ? width * 0.82 : towerWidth;
             tierDepth = splitAlongX ? towerDepth : depth * 0.82;
@@ -1342,6 +1377,25 @@ export class City {
             addBasePart(x - width * 0.34, z, wing, height, depth, 0.94);
             addBasePart(x + width * 0.34, z, wing, height * 0.9, depth, 0.88);
             addBasePart(x, z + depth * 0.36, width * 0.72, height * 0.78, wing, 1);
+            preciseColliderParts = [
+              { x: x - width * 0.34, z, width: wing, height, depth, bottom: 0 },
+              {
+                x: x + width * 0.34,
+                z,
+                width: wing,
+                height: height * 0.9,
+                depth,
+                bottom: 0,
+              },
+              {
+                x,
+                z: z + depth * 0.36,
+                width: width * 0.72,
+                height: height * 0.78,
+                depth: wing,
+                bottom: 0,
+              },
+            ];
             roofHeight = height;
             break;
           }
@@ -1460,34 +1514,62 @@ export class City {
           propIndex += 1;
         }
 
-        const body = this.world.createRigidBody(
-          RAPIER.RigidBodyDesc.fixed().setTranslation(x, height / 2, z),
-        );
-        this.world.createCollider(RAPIER.ColliderDesc.cuboid(width / 2, height / 2, depth / 2), body);
-        const upperHeight = roofHeight - height;
-        if (upperHeight > 0.5) {
+        const body = this.world.createRigidBody(preciseColliderParts
+          ? RAPIER.RigidBodyDesc.fixed()
+          : RAPIER.RigidBodyDesc.fixed().setTranslation(x, height / 2, z));
+        if (preciseColliderParts) {
+          for (const part of preciseColliderParts) {
+            this.world.createCollider(
+              RAPIER.ColliderDesc.cuboid(part.width / 2, part.height / 2, part.depth / 2)
+                .setTranslation(part.x, part.bottom + part.height / 2, part.z),
+              body,
+            );
+          }
+        } else {
           this.world.createCollider(
-            RAPIER.ColliderDesc.cuboid(
-              upperColliderWidth / 2,
-              upperHeight / 2,
-              upperColliderDepth / 2,
-            ).setTranslation(
-              upperColliderOffsetX,
-              height / 2 + upperHeight / 2,
-              upperColliderOffsetZ,
-            ),
+            RAPIER.ColliderDesc.cuboid(width / 2, height / 2, depth / 2),
             body,
           );
+          const upperHeight = roofHeight - height;
+          if (upperHeight > 0.5) {
+            this.world.createCollider(
+              RAPIER.ColliderDesc.cuboid(
+                upperColliderWidth / 2,
+                upperHeight / 2,
+                upperColliderDepth / 2,
+              ).setTranslation(
+                upperColliderOffsetX,
+                height / 2 + upperHeight / 2,
+                upperColliderOffsetZ,
+              ),
+              body,
+            );
+          }
         }
         bodies.push(body);
 
-        anchors.push(...createBuildingTraversalAnchors({
-          roofX,
-          roofZ,
-          roofHeight,
-          width: tierWidth,
-          depth: tierDepth,
-        }));
+        if (preciseColliderParts) {
+          const anchorParts = archetype === 'courtyard'
+            ? preciseColliderParts
+            : preciseColliderParts.slice(1);
+          for (const part of anchorParts) {
+            anchors.push(...createBuildingTraversalAnchors({
+              roofX: part.x,
+              roofZ: part.z,
+              roofHeight: part.bottom + part.height,
+              width: part.width,
+              depth: part.depth,
+            }));
+          }
+        } else {
+          anchors.push(...createBuildingTraversalAnchors({
+            roofX,
+            roofZ,
+            roofHeight,
+            width: tierWidth,
+            depth: tierDepth,
+          }));
+        }
     }
 
     // The validator is intentionally advisory: it improves city generation
@@ -1620,7 +1702,26 @@ export class City {
     }
 
     this.scene.add(group);
-    this.chunks.set(key, { group, bodies, meshes, anchors, centerX, centerZ, traffic });
+    const detailMeshes: THREE.Object3D[] = [
+      facades,
+      brickFacades,
+      cylinderFacades,
+      architecturalDetails,
+      roofProps,
+      treeCanopies,
+      streetFurniture,
+      streetTreeCanopies,
+    ];
+    this.chunks.set(key, {
+      group,
+      bodies,
+      meshes,
+      anchors,
+      centerX,
+      centerZ,
+      traffic,
+      detailMeshes,
+    });
     this.loadedChunkEvents.push({ x: chunkX, z: chunkZ });
   }
 
