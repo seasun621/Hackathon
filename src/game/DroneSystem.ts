@@ -46,6 +46,13 @@ interface DroneBurst {
   sparks: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   velocities: Float32Array;
   age: number;
+  power: number;
+}
+
+export interface DroneTargetCandidate {
+  id: number;
+  position: THREE.Vector3;
+  distance: number;
 }
 
 export interface DroneTrack {
@@ -391,9 +398,9 @@ export class DroneSystem {
       const burst = this.bursts[index];
       burst.age += dt;
       const progress = Math.min(1, burst.age / 0.62);
-      burst.mesh.scale.setScalar(1 + progress * 5.5);
+      burst.mesh.scale.setScalar((1 + progress * 5.5) * burst.power);
       burst.mesh.material.opacity = (1 - progress) * 0.85;
-      burst.ring.scale.setScalar(1 + progress * 8.5);
+      burst.ring.scale.setScalar((1 + progress * 8.5) * burst.power);
       burst.ring.material.opacity = (1 - progress) * 0.94;
       const sparkPositions = burst.sparks.geometry.attributes.position as THREE.BufferAttribute;
       for (let spark = 0; spark < sparkPositions.count; spark += 1) {
@@ -489,6 +496,32 @@ export class DroneSystem {
       results.push(this.damageDrone(index, damage * falloff));
     }
     return results;
+  }
+
+  findNearbyTargets(
+    position: THREE.Vector3,
+    excludedTargetId: number,
+    radius: number,
+    limit: number,
+  ): DroneTargetCandidate[] {
+    const radiusSquared = radius * radius;
+    const candidates: DroneTargetCandidate[] = [];
+    for (const drone of this.drones) {
+      if (drone.id === excludedTargetId) continue;
+      const distanceSquared = drone.group.position.distanceToSquared(position);
+      if (distanceSquared > radiusSquared) continue;
+      candidates.push({
+        id: drone.id,
+        position: drone.group.position.clone(),
+        distance: Math.sqrt(distanceSquared),
+      });
+    }
+    candidates.sort((left, right) => left.distance - right.distance);
+    return candidates.slice(0, Math.max(0, limit));
+  }
+
+  createLaserChainBurst(position: THREE.Vector3, radius: number): void {
+    this.createBurst(position, true, THREE.MathUtils.clamp(radius / 18, 1, 2.15));
   }
 
   findNearestTarget(position: THREE.Vector3, range: number): { id: number; position: THREE.Vector3 } | null {
@@ -814,7 +847,7 @@ export class DroneSystem {
     return !this.wallIntersections[0] || this.wallIntersections[0].distance >= distance - 2.2;
   }
 
-  private createBurst(position: THREE.Vector3, missile = false): void {
+  private createBurst(position: THREE.Vector3, missile = false, power = 1): void {
     const source = new THREE.MeshBasicMaterial({
       color: missile ? 0xff5a24 : 0xb8ff37,
       transparent: true,
@@ -869,6 +902,6 @@ export class DroneSystem {
       ring.scale.setScalar(1.35);
     }
     this.scene.add(burst, ring, sparks);
-    this.bursts.push({ mesh: burst, ring, sparks, velocities, age: 0 });
+    this.bursts.push({ mesh: burst, ring, sparks, velocities, age: 0, power });
   }
 }

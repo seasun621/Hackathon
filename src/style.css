@@ -1728,6 +1728,7 @@ html.touch-device .anchor-readout { top: calc(50% + 46px); }
 .item-proc.siphon { --item-proc-color: #ff589a; }
 .item-proc.speed { --item-proc-color: #ffe052; }
 .item-proc.boost { --item-proc-color: #ff9a43; }
+.item-proc.attack { --item-proc-color: #52e9ff; }
 
 .inventory-bar {
   position: absolute;
@@ -1886,6 +1887,18 @@ html.touch-device .anchor-readout { top: calc(50% + 46px); }
   rotate: -3deg;
 }
 .status-upgrade .item-status::before { content: '↑'; margin-right: 3px; font-size: 17px; }
+.status-route .item-status {
+  width: 94px;
+  height: 52px;
+  padding: 4px 12px 3px 22px;
+  color: #fff;
+  background: linear-gradient(110deg, #1a2a3b, var(--item-color));
+  clip-path: polygon(0 50%,19% 0,100% 0,86% 50%,100% 100%,19% 100%);
+  text-shadow: 0 1px 0 #07101e;
+  rotate: -3deg;
+  animation: item-status-pulse .68s ease-in-out infinite alternate;
+}
+.status-route .item-status::before { content: 'Y'; margin-right: 5px; color: var(--gold); font-size: 17px; }
 .status-replace .item-status { display: none; }
 .status-consume .item-status {
   width: 58px;
@@ -1952,6 +1965,17 @@ html.touch-device .anchor-readout { top: calc(50% + 46px); }
 }
 .item-card.is-upgrade .item-status { animation: item-status-pulse .7s ease-in-out infinite alternate; }
 .item-slot-lines { position: absolute; inset: 0; pointer-events: none; border-right: 9px solid color-mix(in srgb, var(--item-color) 28%, transparent); }
+.item-card.laser-route {
+  background:
+    radial-gradient(circle at 84% 19%, color-mix(in srgb, var(--item-color) 28%, transparent), transparent 28%),
+    linear-gradient(160deg, color-mix(in srgb, var(--item-color) 22%, #101827), rgba(4,8,17,.98) 65%);
+}
+.item-card.laser-route .item-category::after {
+  content: ' // LV.3 UNLOCK';
+  color: #f5f8fa;
+  font-size: 8px;
+}
+.item-card.route-chain .item-slot-lines { border-right-width: 14px; }
 .item-card.category-passive,
 .inventory-item.category-passive { --item-color: #66f4a5 !important; }
 .item-card.category-attack,

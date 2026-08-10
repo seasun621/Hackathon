@@ -1,7 +1,8 @@
 import itemCsv from '../data/items.csv?raw';
 
 export type ItemCategory = 'passive' | 'attack' | 'equipment';
-export type ItemSlot = 'none' | 'primary' | 'secondary' | 'equipment';
+export type ItemSlot = 'none' | 'primary' | 'secondary' | 'equipment' | 'augment';
+export type LaserUpgradeRoute = 'none' | 'multilock' | 'chain';
 
 export interface ItemDefinition {
   id: string;
@@ -22,7 +23,7 @@ export interface ItemOffer {
   definition: ItemDefinition;
   currentLevel: number;
   nextLevel: number;
-  status: 'NEW' | 'UPGRADE' | 'REPLACE' | 'CONSUME';
+  status: 'NEW' | 'UPGRADE' | 'REPLACE' | 'CONSUME' | 'ROUTE';
   replacedItem?: ItemDefinition;
 }
 
@@ -46,6 +47,16 @@ export interface WeaponStats {
   damage: number;
   cooldown: number;
   range: number;
+}
+
+export interface LaserAugmentStats {
+  route: LaserUpgradeRoute;
+  level: number;
+  targetCount: number;
+  secondaryDamageMultiplier: number;
+  splitSearchRadius: number;
+  explosionRadius: number;
+  explosionDamageMultiplier: number;
 }
 
 export interface ItemStatComparison {
@@ -118,6 +129,7 @@ function parseDefinitions(csv: string): ItemDefinition[] {
 }
 
 export class ItemSystem {
+  private static readonly laserRouteIds = ['laser_multilock', 'laser_chain'] as const;
   private readonly definitions = parseDefinitions(itemCsv);
   private readonly definitionMap = new Map(this.definitions.map((item) => [item.id, item]));
   private readonly levels = new Map<string, number>();
@@ -145,13 +157,55 @@ export class ItemSystem {
   }
 
   rollOffers(count = 3): ItemOffer[] {
+    const laserLevel = this.levels.get('laser') ?? 0;
+    const laserRouteId = this.getLaserRouteId();
     const pool = this.definitions.filter((definition) => {
+      if (ItemSystem.laserRouteIds.includes(definition.id as (typeof ItemSystem.laserRouteIds)[number])) {
+        if (laserLevel < 3) return false;
+        if (laserRouteId && definition.id !== laserRouteId) return false;
+      }
       if (definition.maxLevel === 0) return true;
       return (this.levels.get(definition.id) ?? 0) < definition.maxLevel;
     });
     for (let index = pool.length - 1; index > 0; index -= 1) {
       const swapIndex = Math.floor(Math.random() * (index + 1));
       [pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]];
+    }
+    if (laserLevel < 3) {
+      const laser = this.getDefinition('laser');
+      if (laser && (this.levels.get('laser') ?? 0) < laser.maxLevel) {
+        const selection = [laser, ...pool.filter((definition) => definition.id !== 'laser').slice(0, count - 1)];
+        for (let index = selection.length - 1; index > 0; index -= 1) {
+          const swapIndex = Math.floor(Math.random() * (index + 1));
+          [selection[index], selection[swapIndex]] = [selection[swapIndex], selection[index]];
+        }
+        return selection.slice(0, count).map((definition) => this.createOffer(definition));
+      }
+    }
+    if (laserLevel >= 3 && !laserRouteId) {
+      const forcedRoutes = ItemSystem.laserRouteIds
+        .map((id) => this.getDefinition(id))
+        .filter((definition): definition is ItemDefinition => Boolean(definition));
+      const regularPool = pool.filter((definition) => !ItemSystem.laserRouteIds.includes(
+        definition.id as (typeof ItemSystem.laserRouteIds)[number],
+      ));
+      const selection = [...forcedRoutes, ...regularPool.slice(0, Math.max(0, count - forcedRoutes.length))];
+      for (let index = selection.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [selection[index], selection[swapIndex]] = [selection[swapIndex], selection[index]];
+      }
+      return selection.slice(0, count).map((definition) => this.createOffer(definition));
+    }
+    if (laserRouteId) {
+      const route = this.getDefinition(laserRouteId);
+      if (route && (this.levels.get(laserRouteId) ?? 0) < route.maxLevel) {
+        const selection = [route, ...pool.filter((definition) => definition.id !== laserRouteId).slice(0, count - 1)];
+        for (let index = selection.length - 1; index > 0; index -= 1) {
+          const swapIndex = Math.floor(Math.random() * (index + 1));
+          [selection[index], selection[swapIndex]] = [selection[swapIndex], selection[index]];
+        }
+        return selection.slice(0, count).map((definition) => this.createOffer(definition));
+      }
     }
     return pool.slice(0, count).map((definition) => this.createOffer(definition));
   }
@@ -199,6 +253,48 @@ export class ItemSystem {
 
   getPrimaryId(): string {
     return this.primaryId;
+  }
+
+  getLaserAugmentStats(): LaserAugmentStats {
+    const routeId = this.getLaserRouteId();
+    if (!routeId) {
+      return {
+        route: 'none',
+        level: 0,
+        targetCount: 1,
+        secondaryDamageMultiplier: 0,
+        splitSearchRadius: 0,
+        explosionRadius: 0,
+        explosionDamageMultiplier: 0,
+      };
+    }
+    const level = Math.max(1, this.levels.get(routeId) ?? 1);
+    if (routeId === 'laser_multilock') {
+      const definition = this.getDefinition(routeId)!;
+      return {
+        route: 'multilock',
+        level,
+        targetCount: Math.min(3, Math.round(this.definitionValue(definition, level, 'primary'))),
+        secondaryDamageMultiplier: this.definitionValue(definition, level, 'secondary'),
+        splitSearchRadius: 54 + level * 8,
+        explosionRadius: 0,
+        explosionDamageMultiplier: 0,
+      };
+    }
+    const definition = this.getDefinition(routeId)!;
+    return {
+      route: 'chain',
+      level,
+      targetCount: 1,
+      secondaryDamageMultiplier: 0,
+      splitSearchRadius: 0,
+      explosionRadius: this.definitionValue(definition, level, 'primary'),
+      explosionDamageMultiplier: this.definitionValue(definition, level, 'secondary'),
+    };
+  }
+
+  isLaserRouteDefinition(id: string): boolean {
+    return ItemSystem.laserRouteIds.includes(id as (typeof ItemSystem.laserRouteIds)[number]);
   }
 
   getSecondaryId(): string | null {
@@ -269,7 +365,8 @@ export class ItemSystem {
     for (const [id, level] of this.levels) {
       const definition = this.getDefinition(id);
       if (!definition) continue;
-      const equipped = id === this.primaryId || id === this.secondaryId || id === this.equipmentId;
+      const augment = definition.slot === 'augment';
+      const equipped = augment || id === this.primaryId || id === this.secondaryId || id === this.equipmentId;
       if (definition.category === 'passive' || equipped) owned.push({ definition, level, equipped });
     }
     const maxHealthCount = this.permanentCounts.get('max_health_cell') ?? 0;
@@ -284,6 +381,20 @@ export class ItemSystem {
     const { definition, currentLevel, nextLevel } = offer;
     if (definition.id === 'instant_heal') return `HP +${definition.primaryBase}`;
     if (definition.id === 'max_health_cell') return `MAX HP +${definition.primaryBase}`;
+    if (definition.id === 'laser_multilock') {
+      const currentTargets = currentLevel > 0 ? Math.min(3, currentLevel + 1) : 1;
+      const nextTargets = Math.min(3, nextLevel + 1);
+      const currentDamage = currentLevel > 0 ? this.definitionValue(definition, currentLevel, 'secondary') : 0;
+      const nextDamage = this.definitionValue(definition, nextLevel, 'secondary');
+      return `LOCKED TARGETS ${currentTargets} > ${nextTargets} · SPLIT DAMAGE ${Math.round(currentDamage * 100)}% > ${Math.round(nextDamage * 100)}%`;
+    }
+    if (definition.id === 'laser_chain') {
+      const currentRadius = currentLevel > 0 ? this.definitionValue(definition, currentLevel, 'primary') : 0;
+      const nextRadius = this.definitionValue(definition, nextLevel, 'primary');
+      const currentDamage = currentLevel > 0 ? this.definitionValue(definition, currentLevel, 'secondary') : 0;
+      const nextDamage = this.definitionValue(definition, nextLevel, 'secondary');
+      return `BLAST RADIUS ${Math.round(currentRadius)}m > ${Math.round(nextRadius)}m · SPLASH DAMAGE ${Math.round(currentDamage * 100)}% > ${Math.round(nextDamage * 100)}%`;
+    }
     const primary = definition.primaryBase + definition.primaryGrowth * Math.max(0, nextLevel - 1);
     const secondary = definition.secondaryBase + definition.secondaryGrowth * Math.max(0, nextLevel - 1);
     const currentPrimary = definition.primaryBase + definition.primaryGrowth * Math.max(0, currentLevel - 1);
@@ -327,6 +438,18 @@ export class ItemSystem {
       rows = [{ label: 'HEALTH RESTORE', current: 0, next: definition.primaryBase, max: definition.primaryBase, unit: ' HP' }];
     } else if (definition.id === 'max_health_cell') {
       rows = [{ label: 'MAX HEALTH', current: 0, next: definition.primaryBase, max: definition.primaryBase, unit: ' HP' }];
+    } else if (definition.id === 'laser_multilock') {
+      const currentTargets = currentLevel > 0 ? Math.min(3, currentLevel + 1) : 1;
+      const nextTargets = Math.min(3, nextLevel + 1);
+      rows = [
+        { label: 'SIMULTANEOUS TARGETS', current: currentTargets, next: nextTargets, max: 3, unit: '' },
+        this.percentRow('SPLIT BEAM DAMAGE', currentSecondary, secondary, maxSecondary),
+      ];
+    } else if (definition.id === 'laser_chain') {
+      rows = [
+        { label: 'BLAST RADIUS', current: currentPrimary, next: primary, max: maxPrimary, unit: 'm' },
+        this.percentRow('SPLASH DAMAGE', currentSecondary, secondary, maxSecondary),
+      ];
     } else if (definition.slot === 'primary' || definition.slot === 'secondary') {
       const currentRange = currentLevel > 0 ? this.getWeaponRange(definition.id, currentLevel) : 0;
       const nextRange = this.getWeaponRange(definition.id, nextLevel);
@@ -375,7 +498,9 @@ export class ItemSystem {
     } else if (definition.slot === 'equipment' && this.equipmentId && this.equipmentId !== definition.id) {
       replacedItem = this.getDefinition(this.equipmentId) ?? undefined;
     }
-    const status = definition.maxLevel === 0
+    const status = this.isLaserRouteDefinition(definition.id) && currentLevel === 0
+      ? 'ROUTE'
+      : definition.maxLevel === 0
       ? 'CONSUME'
       : currentLevel > 0
         ? 'UPGRADE'
@@ -383,6 +508,12 @@ export class ItemSystem {
           ? 'REPLACE'
           : 'NEW';
     return { definition, currentLevel, nextLevel, status, replacedItem };
+  }
+
+  private getLaserRouteId(): 'laser_multilock' | 'laser_chain' | null {
+    if ((this.levels.get('laser_multilock') ?? 0) > 0) return 'laser_multilock';
+    if ((this.levels.get('laser_chain') ?? 0) > 0) return 'laser_chain';
+    return null;
   }
 
   private getWeaponStats(id: string): WeaponStats {

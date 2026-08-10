@@ -25,6 +25,14 @@ interface PlayerProjectile {
   homingStrength?: number;
 }
 
+interface BeamTracer {
+  line: THREE.Line;
+  geometry: THREE.BufferGeometry;
+  life: number;
+}
+
+type CombatDamageOutcome = BombDamageResult | DroneDamageResult | HealthPackResult;
+
 interface HudElements {
   score: HTMLElement;
   timer: HTMLElement;
@@ -131,6 +139,7 @@ export class Game {
   private readonly dashJets: Array<THREE.Mesh<THREE.CylinderGeometry, THREE.MeshBasicMaterial>> = [];
   private readonly tracer: THREE.Line;
   private readonly tracerGeometry = new THREE.BufferGeometry();
+  private readonly splitTracers: BeamTracer[] = [];
   private readonly muzzleFlash: THREE.Mesh<THREE.IcosahedronGeometry, THREE.MeshBasicMaterial>;
   private readonly playerProjectiles: PlayerProjectile[] = [];
   private readonly playerBulletGeometry = new THREE.SphereGeometry(0.17, 6, 4);
@@ -199,6 +208,7 @@ export class Game {
   private impactTimer = 0;
   private itemGlideFeedbackTimer = 0;
   private itemSpeedFeedbackTimer = 0;
+  private laserAugmentFeedbackTimer = 0;
   private itemGliding = false;
   private itemSpeedActive = false;
   private itemProcWashTimeout: number | null = null;
@@ -333,6 +343,22 @@ export class Game {
     );
     this.tracer.frustumCulled = false;
     this.scene.add(this.tracer);
+    for (let index = 0; index < 2; index += 1) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+      const line = new THREE.Line(
+        geometry,
+        new THREE.LineBasicMaterial({
+          color: index === 0 ? 0x59edff : 0xb9faff,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      line.frustumCulled = false;
+      line.visible = false;
+      this.scene.add(line);
+      this.splitTracers.push({ line, geometry, life: 0 });
+    }
 
     this.muzzleFlash = new THREE.Mesh(
       new THREE.IcosahedronGeometry(0.09, 0),
@@ -1492,7 +1518,20 @@ export class Game {
     if (weapon.id === 'machinegun') this.spawnMachinegunCasing(muzzlePosition);
     const qualityMultiplier = target.quality === 'perfect' ? 1 : 0.45;
     const hit = this.applyCombatDamage(target, weapon.damage, qualityMultiplier);
-    if (!hit) this.audio.shoot(weapon.id);
+    if (!hit) {
+      this.audio.shoot(weapon.id);
+      return;
+    }
+    if (weapon.id === 'laser' && target.type === 'drone') {
+      this.applyLaserAugment(
+        target.id,
+        hit as DroneDamageResult,
+        muzzlePosition,
+        weapon.damage,
+        qualityMultiplier,
+        target.quality,
+      );
+    }
   }
 
   private handlePickup(kind: 'normal' | 'gold', baseScore: number): void {
@@ -1513,22 +1552,81 @@ export class Game {
     else this.audio.hit();
   }
 
-  private applyCombatDamage(target: CombatTargetRef, damage: number, qualityMultiplier: number): boolean {
+  private applyCombatDamage(
+    target: CombatTargetRef,
+    damage: number,
+    qualityMultiplier: number,
+  ): CombatDamageOutcome | null {
     if (target.type === 'health') {
       const healthPack = this.targets.activateHealthPackById(target.id, target.quality);
       if (healthPack) this.handleHealthPack(healthPack);
       else this.clearCombatMarker(target);
-      return Boolean(healthPack);
+      return healthPack;
     }
     const result = target.type === 'bomb'
       ? this.targets.detonateBombById(target.id, target.quality)
       : this.drones.damageDroneById(target.id, damage, qualityMultiplier);
     if (!result) {
       this.clearCombatMarker(target);
-      return false;
+      return null;
     }
     this.handleCombatDamage(target.type, result, target.quality);
-    return true;
+    return result;
+  }
+
+  private applyLaserAugment(
+    primaryTargetId: number,
+    primaryResult: DroneDamageResult,
+    muzzlePosition: THREE.Vector3,
+    weaponDamage: number,
+    qualityMultiplier: number,
+    quality: AimQuality,
+  ): void {
+    const augment = this.items.getLaserAugmentStats();
+    if (augment.route === 'multilock') {
+      const secondaryTargets = this.drones.findNearbyTargets(
+        primaryResult.position,
+        primaryTargetId,
+        augment.splitSearchRadius,
+        augment.targetCount - 1,
+      );
+      for (let index = 0; index < secondaryTargets.length; index += 1) {
+        const secondary = secondaryTargets[index];
+        this.showSplitTracer(index, muzzlePosition, secondary.position);
+        const result = this.drones.damageDroneById(
+          secondary.id,
+          weaponDamage * augment.secondaryDamageMultiplier,
+          qualityMultiplier,
+        );
+        if (result) this.handleCombatDamage('drone', result, quality, false);
+      }
+      if (secondaryTargets.length > 0 && this.laserAugmentFeedbackTimer <= 0) {
+        this.showItemProc(
+          'attack',
+          `분열 조준 ×${secondaryTargets.length + 1}`,
+          `SPLIT BEAM ${Math.round(augment.secondaryDamageMultiplier * 100)}%`,
+          ['laser_multilock'],
+        );
+        this.laserAugmentFeedbackTimer = 2.1;
+      }
+      return;
+    }
+    if (augment.route !== 'chain' || !primaryResult.destroyed) return;
+    this.drones.createLaserChainBurst(primaryResult.position, augment.explosionRadius);
+    const splashResults = this.drones.damageInRadius(
+      primaryResult.position,
+      augment.explosionRadius,
+      weaponDamage * augment.explosionDamageMultiplier,
+    );
+    for (const result of splashResults) this.handleCombatDamage('drone', result, 'perfect', false);
+    this.showItemProc(
+      'attack',
+      '연쇄 폭발',
+      `RADIUS ${Math.round(augment.explosionRadius)}m · ${splashResults.length} TARGETS`,
+      ['laser_chain'],
+    );
+    this.laserAugmentFeedbackTimer = 0.9;
+    this.shake = Math.max(this.shake, 0.66);
   }
 
   private handleHealthPack(result: HealthPackResult): void {
@@ -1801,7 +1899,10 @@ export class Game {
     card.setAttribute('aria-pressed', 'false');
     card.classList.toggle('will-replace', Boolean(offer.replacedItem));
     card.classList.toggle('is-upgrade', offer.status === 'UPGRADE');
-    card.style.setProperty('--item-color', definition.color);
+    card.classList.toggle('laser-route', this.items.isLaserRouteDefinition(definition.id));
+    card.classList.toggle('route-multilock', definition.id === 'laser_multilock');
+    card.classList.toggle('route-chain', definition.id === 'laser_chain');
+    card.style.setProperty('--item-color', definition.color, 'important');
     const category = card.querySelector<HTMLElement>('.item-category');
     const status = card.querySelector<HTMLElement>('.item-status');
     const name = card.querySelector<HTMLElement>('.item-name');
@@ -1809,24 +1910,34 @@ export class Game {
     const description = card.querySelector<HTMLElement>('.item-description');
     const stats = card.querySelector<HTMLElement>('.item-stats');
     const replace = card.querySelector<HTMLElement>('.item-replace');
-    if (category) category.textContent = definition.category.toUpperCase();
+    if (category) category.textContent = this.items.isLaserRouteDefinition(definition.id)
+      ? 'LASER EVOLUTION'
+      : definition.category.toUpperCase();
     if (status) {
       status.textContent = offer.status === 'NEW'
         ? 'NEW'
         : offer.status === 'UPGRADE'
           ? 'UPGRADE'
+          : offer.status === 'ROUTE'
+            ? 'ROUTE'
           : offer.status === 'REPLACE'
             ? 'REPLACE'
             : 'USE';
     }
     if (name) name.textContent = definition.name;
-    if (level) level.textContent = definition.maxLevel === 0 ? 'ONE SHOT' : `LV.${offer.nextLevel}`;
+    if (level) level.textContent = definition.maxLevel === 0
+      ? 'ONE SHOT'
+      : this.items.isLaserRouteDefinition(definition.id)
+        ? `ROUTE LV.${offer.nextLevel} / ${definition.maxLevel}`
+        : `LV.${offer.nextLevel}`;
     if (description) description.textContent = definition.description;
     if (stats) this.renderItemStats(stats, this.items.getOfferStatComparisons(offer));
     if (replace) {
       replace.textContent = offer.replacedItem
         ? `REPLACE // ${offer.replacedItem.name}`
-        : definition.slot === 'primary'
+        : definition.slot === 'augment'
+          ? 'PERMANENT ROUTE // RMB LASER'
+          : definition.slot === 'primary'
           ? 'PRIMARY // RMB'
           : definition.slot === 'secondary'
             ? 'SECONDARY'
@@ -1885,12 +1996,24 @@ export class Game {
     const name = card.querySelector<HTMLElement>('.item-confirm-name');
     const warning = card.querySelector<HTMLElement>('.item-confirm-warning');
     const apply = card.querySelector<HTMLButtonElement>('.item-confirm-apply');
-    if (kicker) kicker.textContent = offer.replacedItem ? 'LOADOUT REPLACEMENT' : `${offer.status} GEAR CHOICE`;
+    if (kicker) kicker.textContent = this.items.isLaserRouteDefinition(offer.definition.id)
+      ? 'LASER EVOLUTION ROUTE'
+      : offer.replacedItem
+        ? 'LOADOUT REPLACEMENT'
+        : `${offer.status} GEAR CHOICE`;
     if (name) name.textContent = offer.definition.name;
-    if (warning) warning.textContent = offer.replacedItem
-      ? `${offer.replacedItem.name}을 해제하고 이 장비로 교체합니다.`
-      : `${offer.definition.description} 이 선택을 확정할까요?`;
-    if (apply) apply.textContent = offer.replacedItem ? '교체 장착' : offer.status === 'UPGRADE' ? '강화 확정' : '선택 확정';
+    if (warning) warning.textContent = offer.status === 'ROUTE'
+      ? `${offer.definition.description} 선택하면 다른 레이저 진화 계통은 잠깁니다.`
+      : offer.replacedItem
+        ? `${offer.replacedItem.name}을 해제하고 이 장비로 교체합니다.`
+        : `${offer.definition.description} 이 선택을 확정할까요?`;
+    if (apply) apply.textContent = offer.status === 'ROUTE'
+      ? '이 계통으로 진화'
+      : offer.replacedItem
+        ? '교체 장착'
+        : offer.status === 'UPGRADE'
+          ? '강화 확정'
+          : '선택 확정';
   }
 
   private cancelUpgradeSelection(index: number): void {
@@ -1961,7 +2084,7 @@ export class Game {
       const icon = document.createElement('div');
       icon.className = `inventory-item category-${item.definition.category}`;
       icon.dataset.itemId = item.definition.id;
-      icon.style.setProperty('--item-color', item.definition.color);
+      icon.style.setProperty('--item-color', item.definition.color, 'important');
       icon.title = `${item.definition.name} LV.${item.level}`;
       icon.innerHTML = `<span class="inventory-name">${item.definition.name}</span><b class="inventory-level"><small>LEVEL</small>${item.level}</b>`;
       this.hud.inventoryBar.append(icon);
@@ -1983,6 +2106,7 @@ export class Game {
     document.documentElement.dataset.gameMode = this.gameMode;
     this.itemGlideFeedbackTimer = 0;
     this.itemSpeedFeedbackTimer = 0;
+    this.laserAugmentFeedbackTimer = 0;
     this.itemGliding = false;
     this.itemSpeedActive = false;
     this.hud.itemProcLayer.replaceChildren();
@@ -2006,6 +2130,10 @@ export class Game {
     this.targets.setGameMode(this.gameMode);
     this.targets.reset();
     this.drones.reset();
+    for (const tracer of this.splitTracers) {
+      tracer.life = 0;
+      tracer.line.visible = false;
+    }
     while (this.playerProjectiles.length > 0) this.removePlayerProjectile(this.playerProjectiles.length - 1);
     this.resetPlayer();
     this.audio.setIntermission(false);
@@ -2556,6 +2684,12 @@ export class Game {
     const tracerMaterial = this.tracer.material as THREE.LineBasicMaterial;
     tracerMaterial.opacity = clamp(this.tracerLife / 0.08, 0, 0.9);
     this.tracer.visible = this.tracerLife > 0;
+    for (const tracer of this.splitTracers) {
+      tracer.life -= dt;
+      const material = tracer.line.material as THREE.LineBasicMaterial;
+      material.opacity = clamp(tracer.life / 0.11, 0, 0.92);
+      tracer.line.visible = tracer.life > 0;
+    }
 
     this.toastTimer -= dt;
     if (this.toastTimer <= 0) this.hud.toast.classList.remove('show');
@@ -2571,6 +2705,7 @@ export class Game {
   }
 
   private updateItemActivityFeedback(dt: number): void {
+    this.laserAugmentFeedbackTimer = Math.max(0, this.laserAugmentFeedbackTimer - dt);
     this.itemGlideFeedbackTimer = Math.max(0, this.itemGlideFeedbackTimer - dt);
     this.itemSpeedFeedbackTimer = Math.max(0, this.itemSpeedFeedbackTimer - dt);
     const velocity = this.playerBody.linvel();
@@ -2624,6 +2759,18 @@ export class Game {
     this.tracer.visible = true;
   }
 
+  private showSplitTracer(index: number, start: THREE.Vector3, end: THREE.Vector3): void {
+    const tracer = this.splitTracers[index];
+    if (!tracer) return;
+    const positions = tracer.geometry.attributes.position as THREE.BufferAttribute;
+    positions.setXYZ(0, start.x, start.y, start.z);
+    positions.setXYZ(1, end.x, end.y, end.z);
+    positions.needsUpdate = true;
+    tracer.geometry.computeBoundingSphere();
+    tracer.life = 0.11;
+    tracer.line.visible = true;
+  }
+
   private showDamageNumber(
     position: THREE.Vector3,
     damage: number,
@@ -2648,7 +2795,7 @@ export class Game {
   }
 
   private showItemProc(
-    kind: 'defense' | 'glide' | 'heal' | 'siphon' | 'speed' | 'boost',
+    kind: 'defense' | 'glide' | 'heal' | 'siphon' | 'speed' | 'boost' | 'attack',
     title: string,
     detail: string,
     itemIds: string[],
@@ -2660,6 +2807,7 @@ export class Game {
       siphon: '255, 76, 148',
       speed: '255, 218, 74',
       boost: '255, 147, 55',
+      attack: '82, 233, 255',
     };
     this.hud.itemProcLayer.style.setProperty('--proc-rgb', procColors[kind]);
     this.hud.itemProcLayer.classList.remove('wash-active');
@@ -2676,7 +2824,13 @@ export class Game {
     const proc = document.createElement('div');
     proc.className = `item-proc ${kind}`;
     const eyebrow = document.createElement('span');
-    eyebrow.textContent = kind === 'heal' ? 'RECOVERY TRIGGER' : kind === 'siphon' ? 'COUNTER TRIGGER' : 'PASSIVE TRIGGER';
+    eyebrow.textContent = kind === 'heal'
+      ? 'RECOVERY TRIGGER'
+      : kind === 'siphon'
+        ? 'COUNTER TRIGGER'
+        : kind === 'attack'
+          ? 'WEAPON AUGMENT'
+          : 'PASSIVE TRIGGER';
     const heading = document.createElement('strong');
     heading.textContent = title;
     const stats = document.createElement('em');

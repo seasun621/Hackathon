@@ -5,7 +5,9 @@ speed_boost,과급 신경계,passive,none,걷기와 공중 보정 및 최대 비
 gravity_cut,반중력 코어,passive,none,플레이어에게 적용되는 중력을 줄여 체공 시간을 늘린다.,8,0.01,0.01,0,0,#aeb9c2,gravity
 max_health_cell,생체 확장 셀,passive,none,선택 즉시 최대 체력을 5 늘리고 그만큼 회복한다.,0,5,0,0,0,#ff759d,heart
 blood_siphon,혈액 역류 모듈,passive,none,드론에게 공격받으면 받은 피해 일부를 되돌리고 실제로 빼앗은 체력만큼 회복한다.,6,0.18,0.06,0,0,#ff4f9a,siphon
-laser,펄스 레이저,attack,primary,짧은 사거리에서 지연 없이 연속 조사하는 경량 히트스캔 주무기.,8,34,7,0.070,-0.003,#56efff,laser
+laser,펄스 레이저,attack,primary,3레벨부터 전용 탄환 진화 계통을 선택할 수 있는 연속 히트스캔 주무기.,3,34,7,0.070,-0.003,#56efff,laser
+laser_multilock,분열 조준 코어,attack,augment,레이저를 주변 적에게 분열시킨다. 성장하면 보조 광선 피해와 동시 타격 수가 증가한다.,3,2,1,0.50,0.18,#52e9ff,laser-split
+laser_chain,연쇄 폭발 탄두,attack,augment,레이저로 적을 파괴하면 충격파를 일으켜 주변 드론에게 피해를 준다.,3,18,9,0.35,0.17,#ff9f43,laser-chain
 jetpack,이중 분사 제트팩,equipment,equipment,가스 부스트의 추진 속도와 지속 시간을 늘린다.,6,0.20,0.11,0,0,#ffbe45,jetpack
 wingsuit,막날개 슈트,equipment,equipment,로프를 놓은 동안 낙하 중력을 줄여 활공 시간을 늘린다.,6,0.18,0.07,0,0,#69dcff,wingsuit
 armor,반응 장갑,equipment,equipment,최대 체력을 늘리고 받는 피해를 추가로 감소시킨다.,6,22,10,0.08,0.04,#ff6c73,armor

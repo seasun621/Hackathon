@@ -81,6 +81,21 @@ function createItemModel(definition: ItemDefinition): THREE.Group {
       group.add(mesh(box, glow, [0.12, 0.34, 0], [0.62, 0.12, 0.22]));
       group.add(mesh(box, dark, [-0.35, -0.46, 0], [0.32, 0.6, 0.4], [0, 0, -0.2]));
       break;
+    case 'laser-split':
+      group.add(mesh(sphere, dark, [-0.35, 0, 0], [0.82, 0.82, 0.82]));
+      group.add(mesh(torus, accent, [-0.35, 0, 0], [1.08, 1.08, 1.08], [Math.PI / 2, 0, 0]));
+      for (const [index, y] of [-0.52, 0, 0.52].entries()) {
+        group.add(mesh(cylinder, index === 1 ? light : accent, [0.72, y, 0], [0.16, 1.3, 0.16], [0, 0, Math.PI / 2]));
+        group.add(mesh(sphere, glow, [1.42, y, 0], [0.22, 0.22, 0.22]));
+      }
+      break;
+    case 'laser-chain':
+      group.add(mesh(cylinder, dark, [-0.22, 0, 0], [0.7, 1.25, 0.7], [0, 0, Math.PI / 2]));
+      group.add(mesh(sphere, accent, [0.72, 0, 0], [0.72, 0.72, 0.72]));
+      group.add(mesh(torus, glow, [0.72, 0, 0], [1.28, 1.28, 1.28], [0, Math.PI / 2, 0]));
+      group.add(mesh(cone, light, [1.55, 0, 0], [0.42, 0.72, 0.42], [0, 0, -Math.PI / 2]));
+      for (const y of [-0.58, 0.58]) group.add(mesh(box, accent, [-0.48, y, 0], [0.68, 0.15, 0.36]));
+      break;
     case 'machinegun':
       group.add(mesh(box, dark, [-0.18, 0, 0], [1.28, 0.62, 0.7]));
       for (const z of [-0.22, 0, 0.22]) {
