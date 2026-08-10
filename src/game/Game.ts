@@ -201,7 +201,13 @@ export class Game {
   private hudTimer = 0;
   private performanceTimer = 0;
   private performanceFrames = 0;
-  private readonly maximumPixelRatio = Math.min(window.devicePixelRatio, 1.15);
+  private readonly mobilePerformanceProfile = window.matchMedia('(pointer: coarse)').matches
+    || window.innerWidth < 900;
+  private readonly maximumPixelRatio = Math.min(
+    window.devicePixelRatio,
+    this.mobilePerformanceProfile ? 0.85 : 1,
+  );
+  private readonly minimumPixelRatio = this.mobilePerformanceProfile ? 0.55 : 0.64;
   private currentPixelRatio = this.maximumPixelRatio;
   private touchMovePointerId: number | null = null;
   private touchLookPointerId: number | null = null;
@@ -316,6 +322,7 @@ export class Game {
     this.updateCamera(0);
     this.updateAnchorSelection(0);
     this.updateHud();
+    void this.renderer.compileAsync(this.scene, this.camera);
     this.renderer.setAnimationLoop(this.frame);
   }
 
@@ -1024,12 +1031,17 @@ export class Game {
     }
     this.performanceTimer += dt;
     this.performanceFrames += 1;
-    if (this.performanceTimer < 1.4) return;
+    if (this.performanceTimer < 1.2) return;
 
     const fps = this.performanceFrames / this.performanceTimer;
+    const lowerTarget = this.mobilePerformanceProfile ? 44 : 52;
+    const upperTarget = this.mobilePerformanceProfile ? 51 : 58;
     let nextRatio = this.currentPixelRatio;
-    if (fps < 52) nextRatio = Math.max(0.68, this.currentPixelRatio - 0.12);
-    else if (fps > 58) nextRatio = Math.min(this.maximumPixelRatio, this.currentPixelRatio + 0.04);
+    if (fps < lowerTarget) {
+      nextRatio = Math.max(this.minimumPixelRatio, this.currentPixelRatio - 0.14);
+    } else if (fps > upperTarget) {
+      nextRatio = Math.min(this.maximumPixelRatio, this.currentPixelRatio + 0.035);
+    }
     if (Math.abs(nextRatio - this.currentPixelRatio) >= 0.049) {
       this.currentPixelRatio = nextRatio;
       this.renderer.setPixelRatio(this.currentPixelRatio);
@@ -1038,6 +1050,10 @@ export class Game {
     this.renderer.domElement.dataset.pixelRatio = this.currentPixelRatio.toFixed(2);
     this.renderer.domElement.dataset.drawCalls = String(this.renderer.info.render.calls);
     this.renderer.domElement.dataset.triangles = String(this.renderer.info.render.triangles);
+    const cityStats = this.city.getPerformanceStats();
+    this.renderer.domElement.dataset.cityChunks = String(cityStats.chunks);
+    this.renderer.domElement.dataset.physicsBodies = String(cityStats.physicsBodies);
+    this.renderer.domElement.dataset.raycastMeshes = String(cityStats.raycastMeshes);
     this.performanceTimer = 0;
     this.performanceFrames = 0;
   }

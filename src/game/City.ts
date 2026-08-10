@@ -26,6 +26,7 @@ interface CityChunk {
   centerZ: number;
   traffic: TrafficAnimation | null;
   detailMeshes: THREE.Object3D[];
+  physicsEnabled: boolean;
 }
 
 interface TrafficCar {
@@ -155,6 +156,7 @@ function clamp01(value: number): number {
 export class City {
   private readonly chunks = new Map<string, CityChunk>();
   private readonly buildingMeshes: THREE.Mesh[] = [];
+  private readonly nearbyBuildingMeshes: THREE.Mesh[] = [];
   private readonly wantedChunks = new Set<string>();
   private readonly pendingChunks: PendingChunk[] = [];
   private readonly pendingKeys = new Set<string>();
@@ -224,6 +226,7 @@ export class City {
   private lastPrefetchX = Number.NaN;
   private lastPrefetchZ = Number.NaN;
   private lastTrafficUpdate = 0;
+  private activePhysicsBodies = 0;
   private readonly trafficTransform = new THREE.Object3D();
   private readonly aerialEnvironment: THREE.Group;
 
@@ -371,9 +374,18 @@ export class City {
         this.pendingChunks.splice(index, 1);
         this.pendingKeys.delete(pending.key);
       }
+      this.pendingChunks.sort((a, b) => {
+        const aDistance = Math.hypot(a.x - centerX, a.z - centerZ);
+        const bDistance = Math.hypot(b.x - centerX, b.z - centerZ);
+        const aForward = (a.x - centerX) * prefetchX + (a.z - centerZ) * prefetchZ;
+        const bForward = (b.x - centerX) * prefetchX + (b.z - centerZ) * prefetchZ;
+        return (aDistance - aForward * 0.12) - (bDistance - bForward * 0.12);
+      });
     }
 
-    const creationBudget = firstUpdate ? this.pendingChunks.length : 1;
+    // Build the immediate play area first instead of compiling every visible
+    // chunk during the first browser frame. Remaining chunks stream in safely.
+    const creationBudget = firstUpdate ? Math.min(9, this.pendingChunks.length) : 1;
     for (let index = 0; index < creationBudget; index += 1) {
       const pending = this.pendingChunks.shift();
       if (!pending) break;
@@ -388,11 +400,29 @@ export class City {
         chunk.centerX - playerPosition.x,
         chunk.centerZ - playerPosition.z,
       );
-      const showFineDetail = detailDistance < CONFIG.chunkSize * 1.72;
+      const showFineDetail = detailDistance < CONFIG.chunkSize * 1.5;
       for (const mesh of chunk.detailMeshes) mesh.visible = showFineDetail;
+      if (chunk.traffic) chunk.traffic.mesh.visible = detailDistance < CONFIG.chunkSize * 1.65;
+      const enablePhysics = detailDistance < CONFIG.chunkSize * 1.72;
+      if (chunk.physicsEnabled !== enablePhysics) {
+        chunk.physicsEnabled = enablePhysics;
+        for (const body of chunk.bodies) body.setEnabled(enablePhysics);
+      }
       if (this.wantedChunks.has(key)) continue;
       this.removeChunk(key, chunk);
       break;
+    }
+
+    this.nearbyBuildingMeshes.length = 0;
+    this.activePhysicsBodies = 0;
+    const raycastDistance = CONFIG.chunkSize * 1.9;
+    for (const chunk of this.chunks.values()) {
+      const dx = chunk.centerX - playerPosition.x;
+      const dz = chunk.centerZ - playerPosition.z;
+      const distanceSquared = dx * dx + dz * dz;
+      if (chunk.physicsEnabled) this.activePhysicsBodies += chunk.bodies.length;
+      if (distanceSquared > raycastDistance * raycastDistance) continue;
+      this.nearbyBuildingMeshes.push(...chunk.meshes);
     }
 
     const now = performance.now() * 0.001;
@@ -409,7 +439,15 @@ export class City {
   }
 
   getBuildingMeshes(): THREE.Mesh[] {
-    return this.buildingMeshes;
+    return this.nearbyBuildingMeshes;
+  }
+
+  getPerformanceStats(): { chunks: number; physicsBodies: number; raycastMeshes: number } {
+    return {
+      chunks: this.chunks.size,
+      physicsBodies: this.activePhysicsBodies,
+      raycastMeshes: this.nearbyBuildingMeshes.length,
+    };
   }
 
   consumeLoadedChunks(): LoadedCityChunk[] {
@@ -1721,6 +1759,7 @@ export class City {
       centerZ,
       traffic,
       detailMeshes,
+      physicsEnabled: true,
     });
     this.loadedChunkEvents.push({ x: chunkX, z: chunkZ });
   }
@@ -1768,6 +1807,9 @@ export class City {
       const index = this.buildingMeshes.indexOf(mesh);
       if (index >= 0) this.buildingMeshes.splice(index, 1);
     }
+    chunk.group.traverse((object) => {
+      if (object instanceof THREE.InstancedMesh) object.dispose();
+    });
     this.chunks.delete(key);
   }
 
