@@ -9,6 +9,7 @@ import laserSoundUrl from '../../sound/레이저건.mp3?url';
 import droneHitSoundUrl from '../../sound/드론 맞는소리.mp3?url';
 import droneShootSoundUrl from '../../sound/드론 총소리.mp3?url';
 import playerHitSoundUrl from '../../sound/드론한테맞음.mp3?url';
+import timerSoundUrl from '../../sound/타이머.mp3?url';
 
 const MUSIC_VOLUME = 0.27;
 
@@ -44,6 +45,7 @@ export class AudioSystem {
   private readonly music = new Audio(musicUrl);
   private readonly ropeRide = new Audio(ropeRideSoundUrl);
   private readonly wind = new Audio(windSoundUrl);
+  private readonly timerEnd = new Audio(timerSoundUrl);
   private readonly fadeFrames = new Map<HTMLAudioElement, number>();
   private readonly oneShotPools = new Map<OneShotKey, OneShotPool>();
   private readonly lastSyntheticEffectAt = new Map<string, number>();
@@ -55,6 +57,7 @@ export class AudioSystem {
   private musicPlayPending = false;
   private suppressedOneShots = 0;
   private recycledOneShots = 0;
+  private timerCueActive = false;
 
   constructor() {
     this.music.loop = true;
@@ -67,6 +70,12 @@ export class AudioSystem {
     this.wind.loop = true;
     this.wind.preload = 'auto';
     this.wind.volume = 0;
+    this.timerEnd.preload = 'auto';
+    this.timerEnd.volume = 0.9;
+    this.timerEnd.addEventListener('ended', () => {
+      this.timerCueActive = false;
+    });
+    this.timerEnd.load();
     this.createOneShotPool('ropeAttach', ropeAttachSoundUrl, 3, 80, 2);
     this.createOneShotPool('dash', dashSoundUrl, 2, 120, 3);
     this.createOneShotPool('bomb', bombExplosionSoundUrl, 3, 90, 7);
@@ -90,7 +99,7 @@ export class AudioSystem {
     this.setPaused(false);
   }
 
-  setPaused(paused: boolean): void {
+  setPaused(paused: boolean, keepTimerCue = false): void {
     this.paused = paused;
     if (paused) {
       this.stopOneShots();
@@ -99,10 +108,27 @@ export class AudioSystem {
       });
       this.fadeAndStopLoop(this.ropeRide, 'rope');
       this.fadeAndStopLoop(this.wind, 'wind');
+      if (!keepTimerCue) this.timerEnd.pause();
       return;
     }
     if (!this.mediaEnabled) return;
     this.startMusic();
+    if (this.timerCueActive && this.timerEnd.paused) void this.timerEnd.play().catch(() => undefined);
+  }
+
+  startRunEndCue(elapsedSeconds = 0): void {
+    if (!this.mediaEnabled || this.timerCueActive) return;
+    this.timerCueActive = true;
+    this.timerEnd.currentTime = Math.max(0, elapsedSeconds);
+    void this.timerEnd.play().catch(() => {
+      this.timerCueActive = false;
+    });
+  }
+
+  resetRunEndCue(): void {
+    this.timerCueActive = false;
+    this.timerEnd.pause();
+    this.timerEnd.currentTime = 0;
   }
 
   getPerformanceStats(): {
@@ -243,11 +269,11 @@ export class AudioSystem {
     this.noise(duration, 0.035 + power * 0.025, 2100);
   }
 
-  droneShoot(kind: 'scout' | 'assault'): void {
+  droneShoot(kind: 'scout' | 'assault' | 'golem'): void {
     this.playOneShot(
       'droneShoot',
-      kind === 'assault' ? 0.64 : 0.5,
-      (kind === 'assault' ? 0.82 : 1.04) + Math.random() * 0.05,
+      kind === 'golem' ? 0.76 : kind === 'assault' ? 0.64 : 0.5,
+      (kind === 'golem' ? 0.62 : kind === 'assault' ? 0.82 : 1.04) + Math.random() * 0.05,
     );
   }
 
@@ -350,9 +376,9 @@ export class AudioSystem {
     const startVolume = audio.volume;
     const startTime = performance.now();
     const tick = (time: number): void => {
-      const progress = Math.min(1, (time - startTime) / Math.max(1, durationMs));
+      const progress = Math.min(1, Math.max(0, (time - startTime) / Math.max(1, durationMs)));
       const eased = 1 - Math.pow(1 - progress, 2);
-      audio.volume = startVolume + (targetVolume - startVolume) * eased;
+      audio.volume = Math.min(1, Math.max(0, startVolume + (targetVolume - startVolume) * eased));
       if (progress < 1) {
         this.fadeFrames.set(audio, requestAnimationFrame(tick));
         return;

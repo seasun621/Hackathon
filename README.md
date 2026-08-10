@@ -1,10 +1,10 @@
-# NEON TETHER
+# SUPER SWING
 
 절차 생성되는 로우폴리 도심에서 로프 스윙, 타이밍 사격, 무작위 장비 조합을 결합한 1인칭 3D 로그라이크 스코어 액션 프로토타입입니다. 별도의 3D 모델 없이 Three.js 기본 도형과 Rapier 물리로 제작했습니다.
 
 ## 웹에서 플레이
 
-[GitHub Pages에서 NEON TETHER 실행하기](https://seasun621.github.io/Hackathon/)
+[GitHub Pages에서 SUPER SWING 실행하기](https://seasun621.github.io/Hackathon/)
 
 화면을 클릭한 뒤 `출격` 버튼을 누르면 시작됩니다. 데스크톱은 키보드·마우스, 휴대폰은 화면 양쪽의 전용 터치 조작을 사용합니다.
 

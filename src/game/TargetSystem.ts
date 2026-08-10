@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, type TargetKind } from './config';
+import { CONFIG, type GameMode, type TargetKind } from './config';
 import type { AimQuality } from './CombatTypes';
 
 interface Target {
@@ -123,6 +123,7 @@ export class TargetSystem {
   private spawnCooldown = 0;
   private bombSpawnCooldown: number = CONFIG.bombInitialSpawnDelay;
   private nextBombSide: number = Math.random() < 0.5 ? -1 : 1;
+  private gameMode: GameMode = 'combat';
 
   constructor(private readonly scene: THREE.Scene) {
     for (const kind of Object.keys(COLORS) as TargetKind[]) {
@@ -142,6 +143,10 @@ export class TargetSystem {
     this.spawnCooldown = 0;
     this.bombSpawnCooldown = CONFIG.bombInitialSpawnDelay;
     this.nextBombSide = Math.random() < 0.5 ? -1 : 1;
+  }
+
+  setGameMode(mode: GameMode): void {
+    this.gameMode = mode;
   }
 
   getPerformanceStats(): {
@@ -169,6 +174,7 @@ export class TargetSystem {
   }
 
   onChunksLoaded(chunks: LoadedTargetChunk[], playerPosition: THREE.Vector3): void {
+    if (this.gameMode === 'time-attack') return;
     let ambientCount = this.targets.reduce(
       (count, target) => count + (target.kind === 'normal' || target.kind === 'gold' ? 1 : 0),
       0,
@@ -218,7 +224,10 @@ export class TargetSystem {
         (count, target) => count + (target.kind === 'bomb' ? 1 : 0),
         0,
       );
-      const missingBombs = Math.max(0, CONFIG.minimumBombs - bombCount);
+      const desiredBombs = this.gameMode === 'time-attack'
+        ? CONFIG.timeAttackMinimumBombs
+        : CONFIG.minimumBombs;
+      const missingBombs = Math.max(0, desiredBombs - bombCount);
       if (missingBombs > 0 && this.bombSpawnCooldown <= 0) {
         this.spawnTarget(playerPosition, forward, 'bomb');
         this.spawnCooldown = 0.28;
@@ -230,7 +239,7 @@ export class TargetSystem {
       target.age += dt;
       target.group.rotation.y += dt * (target.kind === 'gold' ? 2.8 : 1.35);
       target.group.rotation.z += dt * 0.36;
-      if (target.kind === 'bomb') {
+      if (target.kind === 'bomb' && this.gameMode === 'combat') {
         this.trackDirection.copy(playerPosition).sub(target.basePosition);
         const threatDistance = this.trackDirection.length();
         if (threatDistance <= CONFIG.bombImpactDistance) {
@@ -521,8 +530,8 @@ export class TargetSystem {
     horizontalForward.normalize();
     const right = new THREE.Vector3(-horizontalForward.z, 0, horizontalForward.x);
     const bombDistance = THREE.MathUtils.lerp(
-      CONFIG.bombSpawnDistanceMin,
-      CONFIG.bombSpawnDistanceMax,
+      this.gameMode === 'time-attack' ? CONFIG.timeAttackBombSpawnDistanceMin : CONFIG.bombSpawnDistanceMin,
+      this.gameMode === 'time-attack' ? CONFIG.timeAttackBombSpawnDistanceMax : CONFIG.bombSpawnDistanceMax,
       Math.random(),
     );
     const distance = kind === 'bomb' ? bombDistance : 36 + Math.random() * 76;
@@ -702,8 +711,8 @@ export class TargetSystem {
     const target = this.targets[index];
     if (target.kind === 'bomb') {
       this.bombSpawnCooldown = THREE.MathUtils.lerp(
-        CONFIG.bombRespawnDelayMin,
-        CONFIG.bombRespawnDelayMax,
+        this.gameMode === 'time-attack' ? CONFIG.timeAttackBombRespawnDelayMin : CONFIG.bombRespawnDelayMin,
+        this.gameMode === 'time-attack' ? CONFIG.timeAttackBombRespawnDelayMax : CONFIG.bombRespawnDelayMax,
         Math.random(),
       );
     }

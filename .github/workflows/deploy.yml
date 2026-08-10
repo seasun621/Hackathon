@@ -1,4 +1,4 @@
-name: Deploy Neon Tether to GitHub Pages
+name: Deploy SUPER SWING to GitHub Pages
 
 on:
   push:
@@ -47,4 +47,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
-

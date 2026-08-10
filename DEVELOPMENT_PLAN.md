@@ -1,4 +1,4 @@
-# NEON TETHER 프로토타입 개발 계획
+# SUPER SWING 프로토타입 개발 계획
 
 ## 1. 목표
 

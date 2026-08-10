@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import RAPIER, { type Collider, type RigidBody, type World } from '@dimforge/rapier3d-compat';
 import { AudioSystem } from './AudioSystem';
 import { City } from './City';
-import { CONFIG, type RunMode, type RunStats } from './config';
+import { CONFIG, type GameMode, type RunMode, type RunStats } from './config';
 import {
   TargetSystem,
   type BombDamageResult,
@@ -55,19 +55,27 @@ interface HudElements {
   speedLines: HTMLElement;
   vignette: HTMLElement;
   menu: HTMLElement;
+  menuPanel: HTMLElement;
   menuEyebrow: HTMLElement;
   menuTitle: HTMLElement;
   menuTagline: HTMLElement;
   menuButton: HTMLButtonElement;
+  helpButton: HTMLButtonElement;
+  helpCloseButton: HTMLButtonElement;
+  helpDialog: HTMLElement;
+  modeCards: HTMLButtonElement[];
   bestScore: HTMLElement;
   results: HTMLElement;
   resultScore: HTMLElement;
+  resultEyebrow: HTMLElement;
+  resultScoreLabel: HTMLElement;
   resultAccuracy: HTMLElement;
   resultCombo: HTMLElement;
   resultSpeed: HTMLElement;
   resultFalls: HTMLElement;
   recordLabel: HTMLElement;
   replayButton: HTMLButtonElement;
+  resultMenuButton: HTMLButtonElement;
   resultTime: HTMLElement;
   upgradeScreen: HTMLElement;
   upgradeStage: HTMLElement;
@@ -148,8 +156,12 @@ export class Game {
   private leftHeld = false;
   private isGrounded = false;
   private mode: RunMode = 'ready';
+  private gameMode: GameMode = 'combat';
   private stats: RunStats = this.blankStats();
   private elapsedTime = 0;
+  private timeAttackRemaining: number = CONFIG.timeAttackDuration;
+  private runEndCueStarted = false;
+  private bombsDestroyed = 0;
   private stage = 1;
   private nextStageScore: number = CONFIG.stageScoreBase;
   private health: number = CONFIG.playerBaseHealth;
@@ -186,6 +198,7 @@ export class Game {
   private itemSpeedActive = false;
   private itemProcWashTimeout: number | null = null;
   private bestScore = 0;
+  private readonly bestScores: Record<GameMode, number> = { 'time-attack': 0, combat: 0 };
   private readonly bombMarkerElements = new Map<number, HTMLElement>();
   private readonly droneMarkerElements = new Map<number, HTMLElement>();
   private readonly visibleBombMarkerIds = new Set<number>();
@@ -335,7 +348,8 @@ export class Game {
       requiredElement('itemPreview1'),
       requiredElement('itemPreview2'),
     ]);
-    this.loadBestScore();
+    this.loadBestScores();
+    this.selectGameMode('combat');
     this.bindEvents();
     this.resetPlayer();
     this.city.update(this.playerPosition, this.cameraForward);
@@ -368,7 +382,7 @@ export class Game {
       this.cameraForward,
     );
     this.drones.update(
-      this.mode === 'playing' ? realDt : 0,
+      this.mode === 'playing' && this.gameMode === 'combat' ? realDt : 0,
       this.playerPosition,
       this.cameraForward,
       this.stage,
@@ -386,7 +400,11 @@ export class Game {
     }
     let droneDamage = this.drones.consumePlayerDamage();
     while (droneDamage !== null) {
-      this.takeDamage(droneDamage.damage, 'DRONE FIRE', droneDamage.sourceId);
+      this.takeDamage(
+        droneDamage.damage,
+        droneDamage.sourceKind === 'golem' ? 'GOLEM MISSILE' : 'DRONE FIRE',
+        droneDamage.sourceId,
+      );
       droneDamage = this.drones.consumePlayerDamage();
     }
     this.scene.updateMatrixWorld();
@@ -407,6 +425,17 @@ export class Game {
 
   private updatePlaying(realDt: number): void {
     this.elapsedTime += realDt;
+    if (this.gameMode === 'time-attack') {
+      this.timeAttackRemaining = Math.max(0, this.timeAttackRemaining - realDt);
+      if (!this.runEndCueStarted && this.timeAttackRemaining <= CONFIG.timeAttackEndBellLead) {
+        this.runEndCueStarted = true;
+        this.audio.startRunEndCue(CONFIG.timeAttackEndBellLead - this.timeAttackRemaining);
+      }
+      if (this.timeAttackRemaining <= 0) {
+        this.finishRun();
+        return;
+      }
+    }
     this.invulnerabilityTimer = Math.max(0, this.invulnerabilityTimer - realDt);
     this.autoGlideTimer = Math.max(0, this.autoGlideTimer - realDt);
 
@@ -430,7 +459,7 @@ export class Game {
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
     this.stats.topSpeed = Math.max(this.stats.topSpeed, speed);
     this.updateStamina(realDt);
-    if (this.stats.score >= this.nextStageScore) this.enterUpgradeSelection();
+    if (this.gameMode === 'combat' && this.stats.score >= this.nextStageScore) this.enterUpgradeSelection();
     // The street and every rooftop are valid play spaces. This guard now only
     // handles an impossible physics escape below the oversized ground collider.
     if (this.playerPosition.y < -20) this.respawnAfterFall();
@@ -1031,18 +1060,20 @@ export class Game {
     marker.style.top = `${y}%`;
     marker.style.setProperty('--health-ratio', String(track.healthRatio));
     marker.classList.toggle('assault', track.kind === 'assault');
+    marker.classList.toggle('golem', track.kind === 'golem');
     marker.classList.toggle('selected', track.locked);
     marker.classList.toggle('perfect', track.locked && track.quality === 'perfect');
     marker.classList.toggle('graze', track.locked && track.quality === 'graze');
     const label = marker.querySelector<HTMLElement>('.drone-lock-label');
     if (label) {
+      const enemyPrefix = track.kind === 'golem' ? 'GOLEM ' : track.kind === 'assault' ? 'HEAVY ' : '';
       label.textContent = track.locked
         ? track.quality === 'perfect'
-          ? `${track.kind === 'assault' ? 'HEAVY ' : ''}AUTO DIRECT // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
-          : `${track.kind === 'assault' ? 'HEAVY ' : ''}AUTO GRAZE // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
+          ? `${enemyPrefix}AUTO DIRECT // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
+          : `${enemyPrefix}AUTO GRAZE // ${this.touchControlsEnabled ? 'TAP' : 'RMB'}`
         : !track.inEngageRange
           ? `OUT OF RANGE // ${Math.round(track.distance)} M`
-          : `${track.kind === 'assault' ? 'HEAVY ' : ''}AUTO SCAN // ${Math.round(track.distance)} M`;
+          : `${enemyPrefix}AUTO SCAN // ${Math.round(track.distance)} M`;
     }
   }
 
@@ -1524,6 +1555,7 @@ export class Game {
     if (type === 'drone') this.audio.droneHit();
     else if (playHitSound && !result.destroyed) this.audio.hit();
     if (!result.destroyed) return;
+    if (type === 'bomb') this.bombsDestroyed += 1;
     this.stats.combo += type === 'bomb' ? 3 : 2;
     this.stats.bestCombo = Math.max(this.stats.bestCombo, this.stats.combo);
     const qualityMultiplier = type === 'bomb' ? 1 : quality === 'perfect' ? 1 : 0.48;
@@ -1691,7 +1723,7 @@ export class Game {
         contributors,
       );
     }
-    if (source === 'DRONE FIRE') this.audio.playerHit();
+    if (source === 'DRONE FIRE' || source === 'GOLEM MISSILE') this.audio.playerHit();
 
     const siphonRatio = this.items.getBloodSiphonRatio();
     if (attackerId !== undefined && siphonRatio > 0) {
@@ -1923,6 +1955,10 @@ export class Game {
     this.resetTouchControls();
     this.stats = this.blankStats();
     this.elapsedTime = 0;
+    this.timeAttackRemaining = CONFIG.timeAttackDuration;
+    this.runEndCueStarted = false;
+    this.bombsDestroyed = 0;
+    document.documentElement.dataset.gameMode = this.gameMode;
     this.itemGlideFeedbackTimer = 0;
     this.itemSpeedFeedbackTimer = 0;
     this.itemGliding = false;
@@ -1945,11 +1981,13 @@ export class Game {
     this.physicsAccumulator = 0;
     this.groundRunPhase = 0;
     this.groundRunBlend = 0;
+    this.targets.setGameMode(this.gameMode);
     this.targets.reset();
     this.drones.reset();
     while (this.playerProjectiles.length > 0) this.removePlayerProjectile(this.playerProjectiles.length - 1);
     this.resetPlayer();
     this.audio.setIntermission(false);
+    this.audio.resetRunEndCue();
     this.audio.resume();
     this.tryDash(true);
     this.updateInventoryHud();
@@ -1957,6 +1995,7 @@ export class Game {
     this.hud.upgradeScreen.classList.add('hidden');
     this.hud.results.classList.add('hidden');
     this.hud.menu.classList.add('hidden');
+    this.hud.menuPanel.classList.remove('pause-state');
   }
 
   private finishRun(): void {
@@ -1964,7 +2003,7 @@ export class Game {
     this.rightHeld = false;
     this.resetTouchControls();
     this.audio.setIntermission(false);
-    this.audio.setPaused(true);
+    this.audio.setPaused(true, this.gameMode === 'time-attack' && this.runEndCueStarted);
     this.dashTimeRemaining = 0;
     this.detach();
     const accuracy = this.stats.shots > 0 ? Math.round((this.stats.hits / this.stats.shots) * 100) : 0;
@@ -1972,7 +2011,8 @@ export class Game {
     if (isRecord) {
       this.bestScore = this.stats.score;
       try {
-        localStorage.setItem('neon-tether-best', String(this.bestScore));
+        this.bestScores[this.gameMode] = this.bestScore;
+        localStorage.setItem(`super-swing-best-${this.gameMode}`, String(this.bestScore));
       } catch {
         // Local storage can be unavailable in privacy-restricted browser contexts.
       }
@@ -1984,6 +2024,12 @@ export class Game {
     this.hud.resultSpeed.textContent = `${Math.round(this.stats.topSpeed * 3.6)} km/h`;
     this.hud.resultFalls.textContent = String(this.stats.falls);
     this.hud.resultTime.textContent = this.formatElapsedTime(this.elapsedTime);
+    this.hud.resultEyebrow.textContent = this.gameMode === 'time-attack'
+      ? 'TIME ATTACK COMPLETE'
+      : `COMBAT STAGE ${String(this.stage).padStart(2, '0')} COMPLETE`;
+    this.hud.resultScoreLabel.textContent = this.gameMode === 'time-attack'
+      ? `BOMBS ${this.bombsDestroyed} // SCORE`
+      : 'SCORE';
     this.hud.recordLabel.textContent = isRecord ? 'NEW PERSONAL RECORD' : `BEST ${this.bestScore.toLocaleString('ko-KR')}`;
     this.hud.recordLabel.classList.toggle('new-record', isRecord);
     this.hud.results.classList.remove('hidden');
@@ -2104,10 +2150,26 @@ export class Game {
       if (this.mode === 'ready') this.beginRun();
       this.requestPlayLock();
     });
+    this.hud.modeCards.forEach((card) => {
+      card.addEventListener('click', () => {
+        const selectedMode = card.dataset.gameMode;
+        if (
+          this.mode === 'ready'
+          && (selectedMode === 'combat' || selectedMode === 'time-attack')
+        ) this.selectGameMode(selectedMode);
+      });
+    });
+    this.hud.helpButton.addEventListener('click', () => {
+      this.hud.helpDialog.classList.remove('hidden');
+    });
+    this.hud.helpCloseButton.addEventListener('click', () => {
+      this.hud.helpDialog.classList.add('hidden');
+    });
     this.hud.replayButton.addEventListener('click', () => {
       this.beginRun();
       this.requestPlayLock();
     });
+    this.hud.resultMenuButton.addEventListener('click', () => this.showModeMenu());
     this.hud.itemCards.forEach((card, index) => {
       card.addEventListener('click', () => this.previewUpgradeSelection(index));
     });
@@ -2142,9 +2204,13 @@ export class Game {
   }
 
   private showPauseMenu(): void {
+    this.hud.menuPanel.classList.add('pause-state');
+    this.hud.helpDialog.classList.add('hidden');
     this.hud.menuEyebrow.textContent = 'RUN PAUSED';
     this.hud.menuTitle.textContent = 'PAUSE';
-    this.hud.menuTagline.textContent = '도시는 기다린다. 준비되면 다시 흐름에 올라타자.';
+    this.hud.menuTagline.textContent = this.gameMode === 'time-attack'
+      ? `남은 시간 ${this.formatElapsedTime(Math.ceil(this.timeAttackRemaining))} · 준비되면 기록 사냥을 계속하세요.`
+      : '도시는 기다린다. 준비되면 다시 흐름에 올라타자.';
     this.hud.menuButton.textContent = '계속하기';
     this.hud.menu.classList.remove('hidden');
   }
@@ -2533,8 +2599,17 @@ export class Game {
     const velocity = this.playerBody.linvel();
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
     this.hud.score.textContent = this.stats.score.toLocaleString('ko-KR').padStart(6, '0');
-    this.hud.timer.textContent = this.formatElapsedTime(this.elapsedTime);
-    this.hud.stage.textContent = `STAGE ${String(this.stage).padStart(2, '0')}`;
+    const timerSeconds = this.gameMode === 'time-attack'
+      ? Math.ceil(this.timeAttackRemaining)
+      : this.elapsedTime;
+    this.hud.timer.textContent = this.formatElapsedTime(timerSeconds);
+    this.hud.timer.classList.toggle(
+      'danger',
+      this.gameMode === 'time-attack' && this.timeAttackRemaining <= 10,
+    );
+    this.hud.stage.textContent = this.gameMode === 'time-attack'
+      ? `TIME ATTACK // ${this.bombsDestroyed} BOMBS`
+      : `STAGE ${String(this.stage).padStart(2, '0')}`;
     const healthRatio = clamp(this.health / Math.max(1, this.maxHealth), 0, 1);
     this.hud.healthFill.style.transform = `scaleX(${healthRatio})`;
     this.hud.healthValue.textContent = `${Math.ceil(this.health)} / ${Math.round(this.maxHealth)}`;
@@ -2706,13 +2781,20 @@ export class Game {
       speedLines: requiredElement('speedLines'),
       vignette: requiredElement('vignette'),
       menu: requiredElement('menuScreen'),
+      menuPanel: requiredElement('menuPanel'),
       menuEyebrow: requiredElement('menuEyebrow'),
       menuTitle: requiredElement('menuTitle'),
       menuTagline: requiredElement('menuTagline'),
       menuButton: requiredElement<HTMLButtonElement>('menuButton'),
+      helpButton: requiredElement<HTMLButtonElement>('helpButton'),
+      helpCloseButton: requiredElement<HTMLButtonElement>('helpCloseButton'),
+      helpDialog: requiredElement('helpDialog'),
+      modeCards: Array.from(document.querySelectorAll<HTMLButtonElement>('.mode-card')),
       bestScore: requiredElement('bestScore'),
       results: requiredElement('resultsScreen'),
       resultScore: requiredElement('resultScore'),
+      resultEyebrow: requiredElement('resultEyebrow'),
+      resultScoreLabel: requiredElement('resultScoreLabel'),
       resultAccuracy: requiredElement('resultAccuracy'),
       resultCombo: requiredElement('resultCombo'),
       resultSpeed: requiredElement('resultSpeed'),
@@ -2720,6 +2802,7 @@ export class Game {
       resultTime: requiredElement('resultTime'),
       recordLabel: requiredElement('recordLabel'),
       replayButton: requiredElement<HTMLButtonElement>('replayButton'),
+      resultMenuButton: requiredElement<HTMLButtonElement>('resultMenuButton'),
       upgradeScreen: requiredElement('upgradeScreen'),
       upgradeStage: requiredElement('upgradeStageValue'),
       upgradeReels: requiredElement('upgradeReels'),
@@ -2735,14 +2818,58 @@ export class Game {
     };
   }
 
-  private loadBestScore(): void {
+  private loadBestScores(): void {
     try {
-      const saved = Number(localStorage.getItem('neon-tether-best') ?? '0');
-      this.bestScore = Number.isFinite(saved) ? saved : 0;
+      const legacyCombat = Number(localStorage.getItem('neon-tether-best') ?? '0');
+      const combat = Number(localStorage.getItem('super-swing-best-combat') ?? legacyCombat);
+      const timeAttack = Number(localStorage.getItem('super-swing-best-time-attack') ?? '0');
+      this.bestScores.combat = Number.isFinite(combat) ? combat : 0;
+      this.bestScores['time-attack'] = Number.isFinite(timeAttack) ? timeAttack : 0;
     } catch {
-      this.bestScore = 0;
+      this.bestScores.combat = 0;
+      this.bestScores['time-attack'] = 0;
     }
+    this.bestScore = this.bestScores[this.gameMode];
     this.hud.bestScore.textContent = this.bestScore.toLocaleString('ko-KR');
+  }
+
+  private selectGameMode(mode: GameMode): void {
+    this.gameMode = mode;
+    this.bestScore = this.bestScores[mode];
+    document.documentElement.dataset.gameMode = mode;
+    this.hud.bestScore.textContent = this.bestScore.toLocaleString('ko-KR');
+    this.hud.menuEyebrow.textContent = mode === 'time-attack'
+      ? '90 SECOND BOMB RUSH PROTOCOL'
+      : 'ENDLESS ROGUE FLIGHT PROTOCOL';
+    this.hud.menuTagline.textContent = mode === 'time-attack'
+      ? '전투와 아이템은 없다. 90초 동안 스윙과 조준만으로 최고 기록에 도전하라.'
+      : '에너지를 회수하고 장비를 조립하며, 스테이지 10 너머까지 로봇 군단을 돌파하라.';
+    this.hud.menuButton.textContent = mode === 'time-attack' ? '타임어택 출격' : '전투 모드 출격';
+    for (const card of this.hud.modeCards) {
+      const selected = card.dataset.gameMode === mode;
+      card.classList.toggle('selected', selected);
+      card.setAttribute('aria-checked', String(selected));
+      const selectLabel = card.querySelector<HTMLElement>('.mode-select');
+      if (selectLabel) selectLabel.textContent = selected ? 'SELECTED' : 'SELECT';
+    }
+  }
+
+  private showModeMenu(): void {
+    this.mode = 'ready';
+    this.audio.resetRunEndCue();
+    this.audio.setPaused(true);
+    this.hud.results.classList.add('hidden');
+    this.hud.helpDialog.classList.add('hidden');
+    this.hud.menuPanel.classList.remove('pause-state');
+    this.hud.menuTitle.className = 'super-logo';
+    this.hud.menuTitle.setAttribute('aria-label', 'SUPER SWING');
+    this.hud.menuTitle.innerHTML = `
+      <span class="super-logo-word" data-text="SUPER">SUPER</span>
+      <span class="super-logo-word swing" data-text="SWING">SWING</span>
+      <i class="super-logo-slash"></i>
+    `;
+    this.selectGameMode(this.gameMode);
+    this.hud.menu.classList.remove('hidden');
   }
 
   private blankStats(): RunStats {

@@ -2067,3 +2067,242 @@ html.touch-device .upgrade-confirm-bar {
 }
 html.touch-device .upgrade-replace-warning,
 html.touch-device .upgrade-confirm-bar button { grid-column: 1; grid-row: auto; }
+
+/* SUPER SWING title and mode-select landing screen */
+.menu-panel {
+  width: min(1040px, calc(100vw - 42px));
+  max-height: min(94vh, 860px);
+  padding: 28px 34px 30px;
+  overflow: hidden auto;
+  border-top-color: #fff;
+}
+
+.menu-panel::after {
+  background: repeating-linear-gradient(90deg, #fff 0 12px, transparent 12px 17px);
+}
+
+.super-logo {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  width: max-content;
+  margin: 5px 0 -1px;
+  color: #fff;
+  font: italic 900 clamp(52px, 7.4vw, 96px)/.82 'KBL Court', sans-serif;
+  letter-spacing: -.065em;
+  filter: drop-shadow(7px 8px 0 rgba(16, 28, 49, .9));
+  transform: skewX(-7deg);
+  isolation: isolate;
+}
+
+.super-logo-word {
+  position: relative;
+  display: inline-block;
+  text-shadow: 0 0 16px rgba(255,255,255,.34);
+}
+
+.super-logo-word.swing { margin-left: .12em; }
+.super-logo-word::before,
+.super-logo-word::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: .78;
+  pointer-events: none;
+}
+
+.super-logo-word::before {
+  color: var(--cyan);
+  translate: 5px 1px;
+  clip-path: inset(13% 0 62% 0);
+  animation: super-logo-glitch-a 2.9s steps(1) infinite;
+}
+
+.super-logo-word::after {
+  color: #ff315f;
+  translate: -5px -1px;
+  clip-path: inset(69% 0 9% 0);
+  animation: super-logo-glitch-b 2.3s steps(1) infinite;
+}
+
+.super-logo-slash {
+  width: clamp(34px, 5vw, 70px);
+  height: 9px;
+  margin-left: 20px;
+  background: linear-gradient(90deg, var(--cyan) 0 46%, transparent 46% 55%, #ff315f 55%);
+  box-shadow: 0 0 18px rgba(78,246,255,.55);
+  transform: skewX(-30deg) translateY(-.18em);
+}
+
+.menu-panel > .tagline { margin: 12px 0 18px; }
+.help-button {
+  position: absolute;
+  top: 22px;
+  right: 30px;
+  z-index: 5;
+  min-width: 0;
+  width: 43px;
+  height: 43px;
+  padding: 0;
+  border: 2px solid rgba(255,255,255,.78);
+  clip-path: none;
+  color: #fff;
+  background: rgba(3, 12, 24, .85);
+  box-shadow: 5px 6px 0 rgba(78,246,255,.28);
+  font-size: 25px;
+}
+
+.mode-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+button.mode-card {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 250px;
+  padding: 21px 22px 52px;
+  overflow: hidden;
+  border: 1px solid rgba(180, 205, 224, .22);
+  border-top: 4px solid #6d778c;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%);
+  color: #f4f8fa;
+  background:
+    linear-gradient(125deg, rgba(8, 18, 34, .98), rgba(18, 34, 48, .88)),
+    repeating-linear-gradient(125deg, transparent 0 11px, rgba(255,255,255,.035) 11px 13px);
+  box-shadow: none;
+  text-align: left;
+  transform: none;
+}
+
+button.mode-card:hover { transform: translateY(-3px); }
+button.mode-card.selected {
+  border-color: rgba(78,246,255,.52);
+  border-top-color: var(--cyan);
+  background:
+    linear-gradient(125deg, rgba(8, 22, 38, .99), rgba(18, 54, 65, .9)),
+    repeating-linear-gradient(125deg, transparent 0 11px, rgba(78,246,255,.05) 11px 13px);
+  box-shadow: inset 0 0 45px rgba(78,246,255,.09), 0 0 26px rgba(78,246,255,.08);
+}
+
+.mode-number {
+  position: absolute;
+  top: 13px;
+  right: 16px;
+  color: rgba(255,255,255,.14);
+  font: italic 900 46px/1 'KBL Court', sans-serif;
+}
+
+.mode-icon {
+  position: relative;
+  display: block;
+  width: 55px;
+  height: 55px;
+  margin-bottom: 10px;
+  color: #929bad;
+}
+
+.mode-card.selected .mode-icon { color: var(--cyan); filter: drop-shadow(0 0 10px rgba(78,246,255,.5)); }
+.timer-icon { border: 5px solid currentColor; border-radius: 50%; }
+.timer-icon::before { content: ''; position: absolute; top: -11px; left: 16px; width: 15px; height: 8px; background: currentColor; }
+.timer-icon::after { content: ''; position: absolute; top: 10px; left: 23px; width: 4px; height: 18px; background: currentColor; transform-origin: 50% 100%; rotate: -35deg; }
+.combat-icon::before,
+.combat-icon::after { content: ''; position: absolute; left: 5px; width: 48px; height: 9px; background: currentColor; transform-origin: 50%; }
+.combat-icon::before { top: 21px; rotate: 42deg; }
+.combat-icon::after { top: 21px; rotate: -42deg; }
+.combat-icon i { position: absolute; bottom: 3px; width: 14px; height: 21px; border: 4px solid currentColor; }
+.combat-icon i:first-child { left: 2px; rotate: 42deg; }
+.combat-icon i:last-child { right: 0; rotate: -42deg; }
+
+.mode-kicker { color: #8997aa; font: italic 800 10px 'KBL Jump Condensed', sans-serif; letter-spacing: .13em; }
+.mode-card > strong { margin-top: 1px; font: italic 900 32px 'KBL Court', sans-serif; }
+.mode-card > p { max-width: 92%; margin: 7px 0 11px; color: #b7c3cd; font: 400 13px/1.5 'KBL Jump', sans-serif; letter-spacing: 0; }
+.mode-features { display: flex; flex-wrap: wrap; gap: 5px; }
+.mode-features b { padding: 4px 8px 3px; color: #b8c3ce; background: rgba(255,255,255,.065); font: 800 10px 'KBL Jump Condensed', sans-serif; }
+.mode-card.selected .mode-features b { color: #dffcff; background: rgba(78,246,255,.1); }
+.mode-select { position: absolute; right: 0; bottom: 0; min-width: 126px; padding: 8px 18px 7px; color: #9da7b7; background: #242d3c; font: italic 900 13px 'KBL Court', sans-serif; text-align: center; }
+.mode-card.selected .mode-select { color: var(--ink); background: var(--cyan); }
+
+.menu-panel .actions { margin-top: 18px; }
+.menu-panel .actions #menuButton { min-width: 250px; }
+.help-dialog {
+  position: absolute;
+  inset: 16px;
+  z-index: 10;
+  display: grid;
+  align-content: center;
+  padding: clamp(24px, 5vw, 58px);
+  background: rgba(3, 9, 20, .97);
+  border: 1px solid rgba(78,246,255,.48);
+  box-shadow: inset 0 0 70px rgba(78,246,255,.08);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 22px), calc(100% - 22px) 100%, 0 100%);
+}
+.help-dialog.hidden { display: none; }
+.help-dialog-head { display: flex; align-items: end; justify-content: space-between; margin-bottom: 18px; }
+.help-dialog-head div { display: grid; }
+.help-dialog-head span { color: var(--cyan); font: italic 800 11px 'KBL Jump Condensed', sans-serif; letter-spacing: .16em; }
+.help-dialog-head strong { font: italic 900 42px 'KBL Court', sans-serif; }
+.help-dialog-head button { min-width: 0; width: 44px; height: 44px; padding: 0; color: #fff; background: #293143; box-shadow: none; font-size: 27px; }
+.menu-panel.pause-state { width: min(680px, calc(100vw - 36px)); }
+.menu-panel.pause-state .mode-picker,
+.menu-panel.pause-state .help-button { display: none; }
+.menu-panel.pause-state .super-logo { font-size: clamp(52px, 9vw, 86px); }
+.result-logo { margin: 8px 0 4px; color: #fff; font: italic 900 clamp(34px, 6vw, 58px)/.9 'KBL Court', sans-serif; letter-spacing: -.045em; }
+.result-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+button.secondary-button { color: #eaf7fb; background: #273346; box-shadow: 7px 8px 0 rgba(3,8,16,.48); }
+
+html[data-game-mode='time-attack'] .health-meter,
+html[data-game-mode='time-attack'] .inventory-bar,
+html[data-game-mode='time-attack'] .player-stats { display: none; }
+html[data-game-mode='time-attack'] .stage-value { color: #fff; background: #ff315f; }
+html[data-game-mode='time-attack'] .timer.danger { color: #fff; background: linear-gradient(110deg, #ff315f 0 58%, #8a102f 58%); animation: timer-pulse .42s infinite alternate; }
+.drone-lock.golem {
+  width: 132px;
+  height: 96px;
+  color: #ff8a32;
+  border-width: 5px;
+  filter: drop-shadow(0 0 18px rgba(255,106,36,.9));
+}
+.drone-lock.golem::before,
+.drone-lock.golem::after { height: 18px; background: currentColor; }
+.drone-lock.golem.graze { color: #ff315f; }
+.drone-lock.golem.perfect { color: #38c8ff; border-inline-width: 8px; }
+
+@keyframes super-logo-glitch-a {
+  0%, 88%, 100% { translate: 5px 1px; clip-path: inset(13% 0 62% 0); }
+  90% { translate: -8px 2px; clip-path: inset(54% 0 23% 0); }
+  93% { translate: 10px -2px; clip-path: inset(28% 0 48% 0); }
+}
+@keyframes super-logo-glitch-b {
+  0%, 84%, 100% { translate: -5px -1px; clip-path: inset(69% 0 9% 0); }
+  87% { translate: 7px 2px; clip-path: inset(6% 0 74% 0); }
+  91% { translate: -11px 0; clip-path: inset(43% 0 34% 0); }
+}
+
+@media (max-width: 760px) {
+  .menu-panel { padding: 23px 20px 22px; }
+  .super-logo { font-size: clamp(42px, 12.5vw, 68px); }
+  .super-logo-slash { display: none; }
+  .mode-picker { gap: 9px; }
+  button.mode-card { min-height: 238px; padding: 15px 14px 44px; }
+  .mode-card > strong { font-size: 25px; }
+  .mode-card > p { max-width: none; font-size: 11px; }
+  .mode-features b { font-size: 8px; padding-inline: 5px; }
+  .mode-icon { scale: .78; transform-origin: left top; margin-bottom: -1px; }
+  .mode-number { font-size: 34px; }
+}
+
+@media (max-width: 480px) and (orientation: portrait) {
+  .menu-panel { max-height: 96vh; }
+  .menu-panel > .tagline { margin: 8px 0 11px; font-size: 12px; }
+  .mode-picker { grid-template-columns: 1fr; }
+  button.mode-card { min-height: 156px; padding: 13px 15px 39px 82px; }
+  .mode-icon { position: absolute; left: 17px; top: 24px; }
+  .mode-card > p { margin: 4px 0 7px; }
+  .mode-features { display: none; }
+  .menu-panel .actions { margin-top: 11px; }
+  .menu-panel .actions #menuButton { min-width: 190px; }
+}

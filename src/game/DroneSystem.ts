@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { CONFIG } from './config';
 import type { AimQuality } from './CombatTypes';
 
+export type EnemyKind = 'scout' | 'assault' | 'golem';
+
 interface Drone {
   id: number;
-  kind: 'scout' | 'assault';
+  kind: EnemyKind;
   group: THREE.Group;
   health: number;
   maxHealth: number;
@@ -12,18 +14,22 @@ interface Drone {
   phase: number;
   shootCooldown: number;
   formationAngle: number;
-  rotorLeft: THREE.Mesh;
-  rotorRight: THREE.Mesh;
+  rotorLeft?: THREE.Mesh;
+  rotorRight?: THREE.Mesh;
+  roadAxis?: 'x' | 'z';
 }
 
 interface EnemyBullet {
-  kind: 'scout' | 'assault';
+  kind: EnemyKind;
   position: THREE.Vector3;
   velocity: THREE.Vector3;
   quaternion: THREE.Quaternion;
   life: number;
   damage: number;
   sourceId: number;
+  homing: boolean;
+  speed: number;
+  turnRate: number;
 }
 
 const ENEMY_BULLET_INSTANCE_CAPACITY = 160;
@@ -31,6 +37,7 @@ const ENEMY_BULLET_INSTANCE_CAPACITY = 160;
 export interface DronePlayerHit {
   damage: number;
   sourceId: number;
+  sourceKind: EnemyKind;
 }
 
 interface DroneBurst {
@@ -43,7 +50,7 @@ interface DroneBurst {
 
 export interface DroneTrack {
   targetId: number;
-  kind: 'scout' | 'assault';
+  kind: EnemyKind;
   ndcX: number;
   ndcY: number;
   distance: number;
@@ -89,6 +96,13 @@ export class DroneSystem {
     this.assaultBulletMaterial,
     ENEMY_BULLET_INSTANCE_CAPACITY,
   );
+  private readonly missileGeometry = new THREE.ConeGeometry(0.62, 2.9, 8);
+  private readonly missileMaterial = new THREE.MeshBasicMaterial({ color: 0xff7a24 });
+  private readonly missileInstances = new THREE.InstancedMesh(
+    this.missileGeometry,
+    this.missileMaterial,
+    32,
+  );
   private readonly bulletTransform = new THREE.Object3D();
   private readonly bulletForwardAxis = new THREE.Vector3(0, 0, 1);
   private readonly burstGeometry = new THREE.IcosahedronGeometry(1.4, 1);
@@ -106,6 +120,15 @@ export class DroneSystem {
   private readonly droneMuzzleGeometry = new THREE.BoxGeometry(0.46, 0.46, 0.2);
   private readonly assaultArmorRingGeometry = new THREE.TorusGeometry(1.78, 0.22, 7, 22);
   private readonly assaultShoulderGeometry = new THREE.BoxGeometry(0.78, 0.72, 1.34);
+  private readonly golemTorsoGeometry = new THREE.BoxGeometry(4.2, 4.6, 2.8);
+  private readonly golemChestGeometry = new THREE.BoxGeometry(3.2, 1.15, 0.42);
+  private readonly golemHeadGeometry = new THREE.BoxGeometry(2.15, 1.65, 1.8);
+  private readonly golemEyeGeometry = new THREE.BoxGeometry(1.28, 0.24, 0.12);
+  private readonly golemShoulderGeometry = new THREE.BoxGeometry(1.65, 1.65, 2.45);
+  private readonly golemArmGeometry = new THREE.BoxGeometry(1.1, 3.5, 1.25);
+  private readonly golemLegGeometry = new THREE.BoxGeometry(1.38, 3.8, 1.7);
+  private readonly golemFootGeometry = new THREE.BoxGeometry(1.55, 0.82, 2.5);
+  private readonly golemLauncherGeometry = new THREE.BoxGeometry(1.45, 1.35, 3.1);
   private readonly droneDarkMaterial = new THREE.MeshStandardMaterial({
     color: 0x071722,
     roughness: 0.28,
@@ -128,16 +151,30 @@ export class DroneSystem {
     emissiveIntensity: 0.72,
   });
   private readonly droneNeonMaterial = new THREE.MeshBasicMaterial({ color: 0xb6ff35 });
+  private readonly golemArmorMaterial = new THREE.MeshStandardMaterial({
+    color: 0xe8edf0,
+    roughness: 0.42,
+    metalness: 0.64,
+  });
+  private readonly golemAccentMaterial = new THREE.MeshStandardMaterial({
+    color: 0xff7a24,
+    roughness: 0.3,
+    metalness: 0.72,
+    emissive: 0x5b1900,
+    emissiveIntensity: 0.75,
+  });
   private readonly pendingPlayerDamage: DronePlayerHit[] = [];
   private nextId = 1;
   private nextFormationIndex = 0;
   private spawnCooldown = 1.8;
+  private golemSpawnCooldown = 1.8;
 
   constructor(
     private readonly scene: THREE.Scene,
-    private readonly onShoot: (kind: 'scout' | 'assault') => void = () => undefined,
+    private readonly onShoot: (kind: EnemyKind) => void = () => undefined,
   ) {
-    for (const instances of [this.scoutBulletInstances, this.assaultBulletInstances]) {
+    this.missileGeometry.rotateX(Math.PI / 2);
+    for (const instances of [this.scoutBulletInstances, this.assaultBulletInstances, this.missileInstances]) {
       instances.count = 0;
       instances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       instances.frustumCulled = false;
@@ -160,6 +197,7 @@ export class DroneSystem {
     this.bursts.length = 0;
     this.pendingPlayerDamage.length = 0;
     this.spawnCooldown = 1.8;
+    this.golemSpawnCooldown = 1.8;
     this.nextFormationIndex = 0;
   }
 
@@ -167,6 +205,7 @@ export class DroneSystem {
     drones: number;
     scouts: number;
     assaults: number;
+    golems: number;
     bullets: number;
     bursts: number;
     modelGeometries: number;
@@ -174,10 +213,12 @@ export class DroneSystem {
   } {
     let scouts = 0;
     let assaults = 0;
+    let golems = 0;
     const modelGeometries = new Set<string>();
     const modelMaterials = new Set<string>();
     for (const drone of this.drones) {
-      if (drone.kind === 'assault') assaults += 1;
+      if (drone.kind === 'golem') golems += 1;
+      else if (drone.kind === 'assault') assaults += 1;
       else scouts += 1;
       drone.group.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;
@@ -190,6 +231,7 @@ export class DroneSystem {
       drones: this.drones.length,
       scouts,
       assaults,
+      golems,
       bullets: this.bullets.length,
       bursts: this.bursts.length,
       modelGeometries: modelGeometries.size,
@@ -208,7 +250,11 @@ export class DroneSystem {
     if (stage >= 2) {
       this.spawnCooldown -= dt;
       const desiredCount = Math.min(12, 3 + (stage - 2) * 2);
-      if (this.drones.length < desiredCount && this.spawnCooldown <= 0) {
+      const aerialCount = this.drones.reduce(
+        (count, drone) => count + (drone.kind === 'golem' ? 0 : 1),
+        0,
+      );
+      if (aerialCount < desiredCount && this.spawnCooldown <= 0) {
         const assaultTarget = stage >= 4 ? Math.min(4, 1 + Math.floor((stage - 4) / 2)) : 0;
         const assaultCount = this.drones.reduce(
           (count, drone) => count + (drone.kind === 'assault' ? 1 : 0),
@@ -229,12 +275,36 @@ export class DroneSystem {
       const drone = this.drones[index];
       drone.age += dt;
       drone.shootCooldown -= dt;
-      drone.rotorLeft.rotation.y += dt * 15;
-      drone.rotorRight.rotation.y -= dt * 15;
+      if (drone.rotorLeft) drone.rotorLeft.rotation.y += dt * 15;
+      if (drone.rotorRight) drone.rotorRight.rotation.y -= dt * 15;
       this.direction.copy(playerPosition).sub(drone.group.position);
       const distance = this.direction.length();
-      if (distance > 230) {
+      if (distance > (drone.kind === 'golem' ? 285 : 230)) {
         this.removeDroneAt(index);
+        continue;
+      }
+      if (drone.kind === 'golem') {
+        const horizontalDistance = Math.hypot(
+          playerPosition.x - drone.group.position.x,
+          playerPosition.z - drone.group.position.z,
+        );
+        if (horizontalDistance > 42 && horizontalDistance < CONFIG.droneDetectionRange * 1.55) {
+          const walkSpeed = 3.1 + Math.min(1.1, (stage - 8) * 0.22);
+          if (drone.roadAxis === 'x') {
+            drone.group.position.x += Math.sign(playerPosition.x - drone.group.position.x) * walkSpeed * dt;
+          } else {
+            drone.group.position.z += Math.sign(playerPosition.z - drone.group.position.z) * walkSpeed * dt;
+          }
+          const stride = Math.sin(drone.age * 5.2) * 0.08;
+          drone.group.position.y = 4.05 + Math.abs(stride);
+          drone.group.rotation.z = stride * 0.18;
+        }
+        this.formationTarget.set(playerPosition.x, drone.group.position.y + 0.8, playerPosition.z);
+        drone.group.lookAt(this.formationTarget);
+        if (horizontalDistance > 24 && horizontalDistance < 145 && drone.shootCooldown <= 0) {
+          this.fireAtPlayer(drone, playerPosition, stage);
+          drone.shootCooldown = Math.max(3.05, 4.35 - (stage - 8) * 0.16) + Math.random() * 0.8;
+        }
         continue;
       }
       if (distance > 0.001 && distance < CONFIG.droneDetectionRange) {
@@ -278,14 +348,41 @@ export class DroneSystem {
     for (let index = this.bullets.length - 1; index >= 0; index -= 1) {
       const bullet = this.bullets[index];
       bullet.life -= dt;
+      if (bullet.homing) {
+        this.direction.copy(playerPosition).sub(bullet.position).normalize();
+        this.strafe.copy(bullet.velocity).normalize().lerp(
+          this.direction,
+          Math.min(1, bullet.turnRate * dt),
+        ).normalize();
+        bullet.velocity.copy(this.strafe).multiplyScalar(bullet.speed);
+        bullet.quaternion.setFromUnitVectors(this.bulletForwardAxis, this.strafe);
+      }
       bullet.position.addScaledVector(bullet.velocity, dt);
-      if (bullet.position.distanceToSquared(playerPosition) <= 2.3 * 2.3) {
-        this.pendingPlayerDamage.push({ damage: bullet.damage, sourceId: bullet.sourceId });
+      const hitRadius = bullet.kind === 'golem' ? 3.5 : 2.3;
+      if (bullet.position.distanceToSquared(playerPosition) <= hitRadius * hitRadius) {
+        this.pendingPlayerDamage.push({
+          damage: bullet.damage,
+          sourceId: bullet.sourceId,
+          sourceKind: bullet.kind,
+        });
+        if (bullet.kind === 'golem') this.createBurst(bullet.position, true);
         this.releaseBulletAt(index);
         continue;
       }
       if (bullet.life <= 0 || bullet.position.distanceToSquared(playerPosition) > 240 * 240) {
         this.releaseBulletAt(index);
+      }
+    }
+    if (stage >= 8) {
+      this.golemSpawnCooldown -= dt;
+      const desiredGolems = Math.min(3, stage - 7);
+      const golemCount = this.drones.reduce(
+        (count, drone) => count + (drone.kind === 'golem' ? 1 : 0),
+        0,
+      );
+      if (golemCount < desiredGolems && this.golemSpawnCooldown <= 0) {
+        this.spawnGolem(playerPosition, playerForward, stage);
+        this.golemSpawnCooldown = Math.max(4.2, 8.4 - (stage - 8) * 0.65) + Math.random() * 1.4;
       }
     }
     this.syncBulletInstances();
@@ -477,6 +574,89 @@ export class DroneSystem {
     });
   }
 
+  private spawnGolem(
+    playerPosition: THREE.Vector3,
+    playerForward: THREE.Vector3,
+    stage: number,
+  ): void {
+    const forward = playerForward.clone();
+    forward.y = 0;
+    if (forward.lengthSq() < 0.01) forward.set(0, 0, -1);
+    forward.normalize();
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+    const position = playerPosition.clone()
+      .addScaledVector(forward, 96 + Math.random() * 34)
+      .addScaledVector(right, (Math.random() - 0.5) * 72);
+    const roadAxis: 'x' | 'z' = Math.random() < 0.5 ? 'x' : 'z';
+    if (roadAxis === 'x') position.z = Math.round(position.z / CONFIG.chunkSize) * CONFIG.chunkSize;
+    else position.x = Math.round(position.x / CONFIG.chunkSize) * CONFIG.chunkSize;
+    position.y = 4.05;
+    const group = this.createGolemModel();
+    group.position.copy(position);
+    this.scene.add(group);
+    const maxHealth = 760 + stage * 96;
+    this.drones.push({
+      id: this.nextId++,
+      kind: 'golem',
+      group,
+      health: maxHealth,
+      maxHealth,
+      age: 0,
+      phase: Math.random() * Math.PI * 2,
+      shootCooldown: 2.2 + Math.random() * 1.2,
+      formationAngle: 0,
+      roadAxis,
+    });
+  }
+
+  private createGolemModel(): THREE.Group {
+    const group = new THREE.Group();
+    const torso = new THREE.Mesh(this.golemTorsoGeometry, this.droneDarkMaterial);
+    torso.position.y = 1.55;
+    group.add(torso);
+    const chest = new THREE.Mesh(this.golemChestGeometry, this.golemArmorMaterial);
+    chest.position.set(0, 2.05, 1.6);
+    group.add(chest);
+    const chestCore = new THREE.Mesh(this.droneEyeGeometry, this.golemAccentMaterial);
+    chestCore.scale.set(1.5, 1.5, 1.2);
+    chestCore.position.set(0, 1.95, 1.86);
+    group.add(chestCore);
+    const head = new THREE.Mesh(this.golemHeadGeometry, this.golemArmorMaterial);
+    head.position.set(0, 4.72, 0.2);
+    group.add(head);
+    const eye = new THREE.Mesh(this.golemEyeGeometry, this.droneNeonMaterial);
+    eye.position.set(0, 4.8, 1.16);
+    group.add(eye);
+
+    for (const side of [-1, 1]) {
+      const shoulder = new THREE.Mesh(this.golemShoulderGeometry, this.golemAccentMaterial);
+      shoulder.position.set(side * 2.72, 2.42, 0.05);
+      group.add(shoulder);
+      const arm = new THREE.Mesh(this.golemArmGeometry, this.droneDarkMaterial);
+      arm.position.set(side * 2.72, 0.12, 0.1);
+      group.add(arm);
+      const leg = new THREE.Mesh(this.golemLegGeometry, this.golemArmorMaterial);
+      leg.position.set(side * 1.12, -2.25, 0);
+      group.add(leg);
+      const foot = new THREE.Mesh(this.golemFootGeometry, this.droneDarkMaterial);
+      foot.position.set(side * 1.12, -4.23, 0.42);
+      group.add(foot);
+    }
+
+    const launcher = new THREE.Mesh(this.golemLauncherGeometry, this.golemAccentMaterial);
+    launcher.position.set(2.82, 3.83, -0.15);
+    launcher.rotation.x = -0.12;
+    group.add(launcher);
+    for (const x of [-0.38, 0.38]) {
+      const muzzle = new THREE.Mesh(this.droneMuzzleGeometry, this.droneNeonMaterial);
+      muzzle.position.set(2.82 + x, 3.83, 1.48);
+      muzzle.scale.set(0.72, 0.72, 1.2);
+      group.add(muzzle);
+    }
+    group.scale.setScalar(1.1);
+    return group;
+  }
+
   private createDroneModel(kind: 'scout' | 'assault'): { group: THREE.Group; rotorLeft: THREE.Mesh; rotorRight: THREE.Mesh } {
     const group = new THREE.Group();
     const armor = kind === 'assault' ? this.assaultArmorMaterial : this.scoutArmorMaterial;
@@ -553,14 +733,26 @@ export class DroneSystem {
       life: 0,
       damage: 0,
       sourceId: 0,
+      homing: false,
+      speed: 0,
+      turnRate: 0,
     };
     this.direction.copy(playerPosition).sub(drone.group.position).normalize();
     bullet.kind = drone.kind;
-    bullet.position.copy(drone.group.position).addScaledVector(this.direction, 2.8);
+    bullet.position.copy(drone.group.position);
+    if (drone.kind === 'golem') bullet.position.y += 3.7;
+    bullet.position.addScaledVector(this.direction, drone.kind === 'golem' ? 4.2 : 2.8);
     bullet.quaternion.setFromUnitVectors(this.bulletForwardAxis, this.direction);
-    bullet.velocity.copy(this.direction).multiplyScalar(CONFIG.droneBulletSpeed + stage * 1.2);
-    bullet.life = 4.8;
-    bullet.damage = (CONFIG.droneBulletDamage + stage * 1.4) * (drone.kind === 'assault' ? 1.75 : 1);
+    bullet.speed = drone.kind === 'golem'
+      ? 26 + stage * 0.7
+      : CONFIG.droneBulletSpeed + stage * 1.2;
+    bullet.velocity.copy(this.direction).multiplyScalar(bullet.speed);
+    bullet.homing = drone.kind === 'golem';
+    bullet.turnRate = drone.kind === 'golem' ? 1.15 + (stage - 8) * 0.06 : 0;
+    bullet.life = drone.kind === 'golem' ? 7.2 : 4.8;
+    bullet.damage = drone.kind === 'golem'
+      ? 17 + stage * 1.7
+      : (CONFIG.droneBulletDamage + stage * 1.4) * (drone.kind === 'assault' ? 1.75 : 1);
     bullet.sourceId = drone.id;
     this.bullets.push(bullet);
     this.onShoot(drone.kind);
@@ -577,8 +769,10 @@ export class DroneSystem {
   private syncBulletInstances(): void {
     let scoutCount = 0;
     let assaultCount = 0;
+    let missileCount = 0;
     for (const bullet of this.bullets) {
       const assault = bullet.kind === 'assault';
+      const missile = bullet.kind === 'golem';
       this.bulletTransform.position.copy(bullet.position);
       this.bulletTransform.quaternion.copy(bullet.quaternion);
       this.bulletTransform.scale.set(
@@ -587,7 +781,10 @@ export class DroneSystem {
         assault ? 1.28 : 1,
       );
       this.bulletTransform.updateMatrix();
-      if (assault) {
+      if (missile) {
+        this.missileInstances.setMatrixAt(missileCount, this.bulletTransform.matrix);
+        missileCount += 1;
+      } else if (assault) {
         this.assaultBulletInstances.setMatrixAt(assaultCount, this.bulletTransform.matrix);
         assaultCount += 1;
       } else {
@@ -597,8 +794,10 @@ export class DroneSystem {
     }
     this.scoutBulletInstances.count = scoutCount;
     this.assaultBulletInstances.count = assaultCount;
+    this.missileInstances.count = missileCount;
     this.scoutBulletInstances.instanceMatrix.needsUpdate = true;
     this.assaultBulletInstances.instanceMatrix.needsUpdate = true;
+    this.missileInstances.instanceMatrix.needsUpdate = true;
   }
 
   private hasClearShot(
@@ -615,9 +814,9 @@ export class DroneSystem {
     return !this.wallIntersections[0] || this.wallIntersections[0].distance >= distance - 2.2;
   }
 
-  private createBurst(position: THREE.Vector3): void {
+  private createBurst(position: THREE.Vector3, missile = false): void {
     const source = new THREE.MeshBasicMaterial({
-      color: 0xb8ff37,
+      color: missile ? 0xff5a24 : 0xb8ff37,
       transparent: true,
       opacity: 0.85,
       wireframe: true,
@@ -629,7 +828,7 @@ export class DroneSystem {
     const ring = new THREE.Mesh(
       this.burstRingGeometry,
       new THREE.MeshBasicMaterial({
-        color: 0xffdf38,
+        color: missile ? 0xffd24a : 0xffdf38,
         transparent: true,
         opacity: 0.94,
         blending: THREE.AdditiveBlending,
@@ -637,7 +836,7 @@ export class DroneSystem {
       }),
     );
     ring.position.copy(position);
-    const sparkCount = 24;
+    const sparkCount = missile ? 42 : 24;
     const sparkPositions = new Float32Array(sparkCount * 3);
     const velocities = new Float32Array(sparkCount * 3);
     for (let spark = 0; spark < sparkCount; spark += 1) {
@@ -656,7 +855,7 @@ export class DroneSystem {
     const sparks = new THREE.Points(
       sparkGeometry,
       new THREE.PointsMaterial({
-        color: 0xc8ff45,
+        color: missile ? 0xffa12e : 0xc8ff45,
         size: 0.65,
         transparent: true,
         opacity: 1,
@@ -665,6 +864,10 @@ export class DroneSystem {
       }),
     );
     sparks.position.copy(position);
+    if (missile) {
+      burst.scale.setScalar(1.45);
+      ring.scale.setScalar(1.35);
+    }
     this.scene.add(burst, ring, sparks);
     this.bursts.push({ mesh: burst, ring, sparks, velocities, age: 0 });
   }

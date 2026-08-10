@@ -1,4 +1,11 @@
 export const CONFIG = {
+  timeAttackDuration: 90,
+  timeAttackEndBellLead: 10.555,
+  timeAttackMinimumBombs: 4,
+  timeAttackBombRespawnDelayMin: 0.85,
+  timeAttackBombRespawnDelayMax: 1.35,
+  timeAttackBombSpawnDistanceMin: 82,
+  timeAttackBombSpawnDistanceMax: 124,
   gravity: -38,
   risingGravityScale: 0.88,
   fallingGravityScale: 1.32,
@@ -76,6 +83,7 @@ export const CONFIG = {
 } as const;
 
 export type RunMode = 'ready' | 'playing' | 'paused' | 'upgrade' | 'over';
+export type GameMode = 'time-attack' | 'combat';
 export type TargetKind = 'normal' | 'gold' | 'bomb' | 'health';
 
 export interface RunStats {

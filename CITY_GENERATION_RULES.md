@@ -1,4 +1,4 @@
-# NEON TETHER 도시 생성 규칙
+# SUPER SWING 도시 생성 규칙
 
 ## 목표
 
