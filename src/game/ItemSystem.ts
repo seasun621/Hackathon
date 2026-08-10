@@ -48,6 +48,17 @@ export interface WeaponStats {
   range: number;
 }
 
+export interface ItemStatComparison {
+  label: string;
+  current: number;
+  next: number;
+  max: number;
+  unit: string;
+  decimals?: number;
+  lowerIsBetter?: boolean;
+  loss?: boolean;
+}
+
 function parseCsvLine(line: string): string[] {
   const values: string[] = [];
   let value = '';
@@ -199,27 +210,49 @@ export class ItemSystem {
   }
 
   getDamageReduction(): number {
-    const passive = this.valueAtLevel('damage_guard', 'primary');
-    const armor = this.equipmentId === 'armor' ? this.valueAtLevel('armor', 'secondary') : 0;
+    const passive = this.getDamageGuardReduction();
+    const armor = this.getArmorDamageReduction();
     return Math.min(0.72, passive + armor);
   }
 
+  getDamageGuardReduction(): number {
+    return this.valueAtLevel('damage_guard', 'primary');
+  }
+
+  getArmorDamageReduction(): number {
+    return this.equipmentId === 'armor' ? this.valueAtLevel('armor', 'secondary') : 0;
+  }
+
   getSpeedMultiplier(): number {
-    return 1 + this.valueAtLevel('speed_boost', 'primary');
+    return 1 + this.getSpeedBonus();
+  }
+
+  getSpeedBonus(): number {
+    return this.valueAtLevel('speed_boost', 'primary');
   }
 
   getGravityMultiplier(grappling: boolean): number {
-    const passiveReduction = this.valueAtLevel('gravity_cut', 'primary');
-    const wingReduction = !grappling && this.equipmentId === 'wingsuit'
-      ? this.valueAtLevel('wingsuit', 'primary')
-      : 0;
+    const passiveReduction = this.getGravityCutReduction();
+    const wingReduction = !grappling ? this.getWingsuitGravityReduction() : 0;
     return Math.max(0.48, 1 - passiveReduction - wingReduction);
+  }
+
+  getGravityCutReduction(): number {
+    return this.valueAtLevel('gravity_cut', 'primary');
+  }
+
+  getWingsuitGravityReduction(): number {
+    return this.equipmentId === 'wingsuit' ? this.valueAtLevel('wingsuit', 'primary') : 0;
   }
 
   getDashMultiplier(): number {
     return this.equipmentId === 'jetpack'
       ? 1 + this.valueAtLevel('jetpack', 'primary')
       : 1;
+  }
+
+  getBloodSiphonRatio(): number {
+    return this.valueAtLevel('blood_siphon', 'primary');
   }
 
   getEquipmentHealthBonus(): number {
@@ -266,12 +299,67 @@ export class ItemSystem {
     if (definition.id === 'damage_guard') return `INCOMING DAMAGE -${numberProgress(Math.round(currentPrimary * 100), Math.round(primary * 100), '%')}`;
     if (definition.id === 'speed_boost') return `MOVE SPEED +${numberProgress(Math.round(currentPrimary * 100), Math.round(primary * 100), '%')}`;
     if (definition.id === 'gravity_cut') return `GRAVITY -${numberProgress(Math.round(currentPrimary * 100), Math.round(primary * 100), '%')}`;
+    if (definition.id === 'blood_siphon') return `DAMAGE SIPHON ${numberProgress(Math.round(currentPrimary * 100), Math.round(primary * 100), '%')}`;
     if (definition.id === 'jetpack') return `DASH POWER +${numberProgress(Math.round(currentPrimary * 100), Math.round(primary * 100), '%')}`;
     if (definition.id === 'wingsuit') return `GLIDE GRAVITY -${numberProgress(Math.round(currentPrimary * 100), Math.round(primary * 100), '%')}`;
     if (definition.id === 'armor') {
       return `MAX HP +${numberProgress(Math.round(currentPrimary), Math.round(primary))} · DAMAGE -${numberProgress(Math.round(currentSecondary * 100), Math.round(secondary * 100), '%')}`;
     }
     return `LEVEL ${nextLevel}`;
+  }
+
+  getOfferStatComparisons(offer: ItemOffer): ItemStatComparison[] {
+    const { definition, currentLevel, nextLevel } = offer;
+    const primary = this.definitionValue(definition, nextLevel, 'primary');
+    const secondary = this.definitionValue(definition, nextLevel, 'secondary');
+    const currentPrimary = currentLevel > 0 && !offer.replacedItem
+      ? this.definitionValue(definition, currentLevel, 'primary')
+      : 0;
+    const currentSecondary = currentLevel > 0 && !offer.replacedItem
+      ? this.definitionValue(definition, currentLevel, 'secondary')
+      : 0;
+    const maxLevel = Math.max(1, definition.maxLevel);
+    const maxPrimary = this.definitionValue(definition, maxLevel, 'primary');
+    const maxSecondary = this.definitionValue(definition, maxLevel, 'secondary');
+    let rows: ItemStatComparison[] = [];
+
+    if (definition.id === 'instant_heal') {
+      rows = [{ label: 'HEALTH RESTORE', current: 0, next: definition.primaryBase, max: definition.primaryBase, unit: ' HP' }];
+    } else if (definition.id === 'max_health_cell') {
+      rows = [{ label: 'MAX HEALTH', current: 0, next: definition.primaryBase, max: definition.primaryBase, unit: ' HP' }];
+    } else if (definition.slot === 'primary' || definition.slot === 'secondary') {
+      const currentRange = currentLevel > 0 ? this.getWeaponRange(definition.id, currentLevel) : 0;
+      const nextRange = this.getWeaponRange(definition.id, nextLevel);
+      const maxRange = this.getWeaponRange(definition.id, maxLevel);
+      rows = [
+        { label: 'DAMAGE', current: currentPrimary, next: primary, max: maxPrimary, unit: '', decimals: 1 },
+        {
+          label: 'FIRE DELAY', current: currentSecondary, next: Math.max(0.04, secondary),
+          max: Math.max(definition.secondaryBase, 0.04), unit: 's', decimals: 3, lowerIsBetter: true,
+        },
+        { label: 'AUTO-AIM RANGE', current: currentRange, next: nextRange, max: maxRange, unit: 'm' },
+      ];
+    } else if (definition.id === 'damage_guard') {
+      rows = [this.percentRow('DAMAGE CUT', currentPrimary, primary, maxPrimary)];
+    } else if (definition.id === 'speed_boost') {
+      rows = [this.percentRow('MOVE SPEED', currentPrimary, primary, maxPrimary)];
+    } else if (definition.id === 'gravity_cut') {
+      rows = [this.percentRow('GRAVITY CUT', currentPrimary, primary, maxPrimary)];
+    } else if (definition.id === 'blood_siphon') {
+      rows = [this.percentRow('DAMAGE SIPHON', currentPrimary, primary, maxPrimary)];
+    } else if (definition.id === 'jetpack') {
+      rows = [this.percentRow('BOOST THRUST', currentPrimary, primary, maxPrimary)];
+    } else if (definition.id === 'wingsuit') {
+      rows = [this.percentRow('GLIDE GRAVITY CUT', currentPrimary, primary, maxPrimary)];
+    } else if (definition.id === 'armor') {
+      rows = [
+        { label: 'MAX HEALTH', current: currentPrimary, next: primary, max: maxPrimary, unit: ' HP' },
+        this.percentRow('DAMAGE CUT', currentSecondary, secondary, maxSecondary),
+      ];
+    }
+
+    if (offer.replacedItem) rows.push(...this.getReplacementLossRows(offer.replacedItem));
+    return rows;
   }
 
   private createOffer(definition: ItemDefinition): ItemOffer {
@@ -318,6 +406,40 @@ export class ItemSystem {
     if (id === 'missile') return 120 + level * 8;
     if (id === 'air_bomb') return 95 + level * 3;
     return 100;
+  }
+
+  private definitionValue(
+    definition: ItemDefinition,
+    level: number,
+    value: 'primary' | 'secondary',
+  ): number {
+    if (level <= 0) return 0;
+    return value === 'primary'
+      ? definition.primaryBase + definition.primaryGrowth * (level - 1)
+      : definition.secondaryBase + definition.secondaryGrowth * (level - 1);
+  }
+
+  private percentRow(label: string, current: number, next: number, max: number): ItemStatComparison {
+    return { label, current: current * 100, next: next * 100, max: max * 100, unit: '%', decimals: 0 };
+  }
+
+  private getReplacementLossRows(definition: ItemDefinition): ItemStatComparison[] {
+    const level = Math.max(1, this.levels.get(definition.id) ?? 1);
+    const primary = this.definitionValue(definition, level, 'primary');
+    const secondary = this.definitionValue(definition, level, 'secondary');
+    if (definition.id === 'armor') {
+      return [
+        { label: 'LOST MAX HEALTH', current: primary, next: 0, max: primary, unit: ' HP', loss: true },
+        { label: 'LOST DAMAGE CUT', current: secondary * 100, next: 0, max: secondary * 100, unit: '%', loss: true },
+      ];
+    }
+    if (definition.id === 'wingsuit') {
+      return [{ label: 'LOST GLIDE CUT', current: primary * 100, next: 0, max: primary * 100, unit: '%', loss: true }];
+    }
+    if (definition.id === 'jetpack') {
+      return [{ label: 'LOST BOOST THRUST', current: primary * 100, next: 0, max: primary * 100, unit: '%', loss: true }];
+    }
+    return [];
   }
 
   private valueAtLevel(id: string, value: 'primary' | 'secondary'): number {

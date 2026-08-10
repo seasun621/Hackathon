@@ -40,6 +40,7 @@ root.innerHTML = `
     <div id="bombMarkers" class="bomb-markers"></div>
     <div id="enemyMarkers" class="enemy-markers"></div>
     <div id="damageNumbers" class="damage-numbers"></div>
+    <div id="itemProcLayer" class="item-proc-layer"></div>
     <div id="inventoryBar" class="inventory-bar"></div>
     <div id="anchorReadout" class="anchor-readout">ASSIST ANCHOR</div>
     <div id="combo" class="combo">
@@ -90,7 +91,6 @@ root.innerHTML = `
       <button id="touchFire" class="touch-action fire" type="button"><small>TAP</small>FIRE</button>
       <button id="touchDash" class="touch-action dash" type="button"><small>30%+</small>BOOST</button>
       <button id="touchJump" class="touch-action jump" type="button"><small>30%+</small>JUMP</button>
-      <button id="touchSecondary" class="touch-action secondary" type="button"><small>TAP</small>AUX</button>
     </div>
     <button id="touchPause" class="touch-pause" type="button" aria-label="일시정지">Ⅱ</button>
   </div>
@@ -104,7 +104,6 @@ root.innerHTML = `
         <div><kbd>마우스</kbd> 시점 / 조준</div>
         <div><kbd>좌클릭</kbd> 로프 / 당기기</div>
         <div><kbd>우클릭</kbd> 폭탄 잠금 사격</div>
-        <div><kbd>E</kbd> 보조 무기</div>
         <div><kbd>WASD</kbd> 공중 보정 / 느린 보행</div>
         <div><kbd>Q</kbd> 스태미나 전량 가스 추진</div>
         <div><kbd>SPACE</kbd> 가스 전량 수직 점프</div>
@@ -140,10 +139,22 @@ root.innerHTML = `
             <h3 class="item-name">SCANNING...</h3>
             <div class="item-level">LV.1</div>
             <p class="item-description">GEAR DATA ACQUISITION</p>
-            <strong class="item-stats">---</strong>
+            <div class="item-stats"></div>
             <span class="item-replace"></span>
           </button>
         `).join('')}
+      </div>
+      <div id="upgradeConfirmBar" class="upgrade-confirm-bar hidden">
+        <div class="upgrade-confirm-copy">
+          <span id="upgradeConfirmEyebrow">GEAR SELECTED</span>
+          <strong id="upgradeConfirmName">SELECT A CARD</strong>
+          <p id="upgradeConfirmSummary">Confirm the selected upgrade before returning to flight.</p>
+        </div>
+        <label id="upgradeReplaceWarning" class="upgrade-replace-warning hidden">
+          <input id="upgradeReplaceCheck" type="checkbox">
+          <span><b>REPLACEMENT WARNING</b><em id="upgradeReplaceText"></em></span>
+        </label>
+        <button id="upgradeConfirmButton" type="button" disabled>CONFIRM LOADOUT</button>
       </div>
       <div class="upgrade-footer">PASSIVE <i></i> ATTACK <i></i> EQUIPMENT</div>
     </div>

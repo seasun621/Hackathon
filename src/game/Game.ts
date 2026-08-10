@@ -10,7 +10,7 @@ import {
   type HealthPackResult,
 } from './TargetSystem';
 import { DroneSystem, type DroneDamageResult, type DroneTrack } from './DroneSystem';
-import { ItemSystem, type ItemOffer } from './ItemSystem';
+import { ItemSystem, type ItemOffer, type ItemStatComparison } from './ItemSystem';
 import { ItemPreviewSystem } from './ItemPreviewSystem';
 import type { AimQuality, CombatTargetRef } from './CombatTypes';
 
@@ -48,6 +48,7 @@ interface HudElements {
   bombMarkers: HTMLElement;
   enemyMarkers: HTMLElement;
   damageNumbers: HTMLElement;
+  itemProcLayer: HTMLElement;
   inventoryBar: HTMLElement;
   toast: HTMLElement;
   hitFlash: HTMLElement;
@@ -72,6 +73,14 @@ interface HudElements {
   upgradeStage: HTMLElement;
   upgradeReels: HTMLElement;
   itemCards: HTMLButtonElement[];
+  upgradeConfirmBar: HTMLElement;
+  upgradeConfirmEyebrow: HTMLElement;
+  upgradeConfirmName: HTMLElement;
+  upgradeConfirmSummary: HTMLElement;
+  upgradeReplaceWarning: HTMLElement;
+  upgradeReplaceCheck: HTMLInputElement;
+  upgradeReplaceText: HTMLElement;
+  upgradeConfirmButton: HTMLButtonElement;
 }
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -115,10 +124,6 @@ export class Game {
   private readonly playerBulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffd358 });
   private readonly casingGeometry = new THREE.BoxGeometry(0.08, 0.18, 0.08);
   private readonly casingMaterial = new THREE.MeshStandardMaterial({ color: 0xd6a84e, metalness: 0.8, roughness: 0.3 });
-  private readonly missileGeometry = new THREE.CylinderGeometry(0.16, 0.24, 1.2, 7);
-  private readonly missileMaterial = new THREE.MeshBasicMaterial({ color: 0xff8b47 });
-  private readonly airBombGeometry = new THREE.SphereGeometry(0.44, 8, 6);
-  private readonly airBombMaterial = new THREE.MeshBasicMaterial({ color: 0xff3d83 });
   private readonly playerPosition = new THREE.Vector3();
   private readonly damageProjection = new THREE.Vector3();
   private readonly cameraForward = new THREE.Vector3(0, 0, -1);
@@ -165,11 +170,21 @@ export class Game {
   private shake = 0;
   private groundRunPhase = 0;
   private groundRunBlend = 0;
+  private peakFallSpeed = 0;
+  private landingTimer = 0;
+  private landingIntensity = 0;
+  private landingSide = 1;
+  private readonly landingDuration = 0.62;
   private tracerLife = 0;
   private flashLife = 0;
   private toastTimer = 0;
   private damageTimer = 0;
   private impactTimer = 0;
+  private itemGlideFeedbackTimer = 0;
+  private itemSpeedFeedbackTimer = 0;
+  private itemGliding = false;
+  private itemSpeedActive = false;
+  private itemProcWashTimeout: number | null = null;
   private bestScore = 0;
   private readonly bombMarkerElements = new Map<number, HTMLElement>();
   private readonly droneMarkerElements = new Map<number, HTMLElement>();
@@ -180,6 +195,7 @@ export class Game {
   private primaryCooldown = 0;
   private secondaryCooldown = 0;
   private upgradeOffers: ItemOffer[] = [];
+  private selectedUpgradeIndex: number | null = null;
   private anchorSelectionTimer = 0;
   private bombTrackingTimer = 0;
   private hudTimer = 0;
@@ -341,7 +357,7 @@ export class Game {
     }
     let droneDamage = this.drones.consumePlayerDamage();
     while (droneDamage !== null) {
-      this.takeDamage(droneDamage, 'DRONE FIRE');
+      this.takeDamage(droneDamage.damage, 'DRONE FIRE', droneDamage.sourceId);
       droneDamage = this.drones.consumePlayerDamage();
     }
     this.scene.updateMatrixWorld();
@@ -399,7 +415,19 @@ export class Game {
 
   private stepPhysics(dt: number): void {
     this.world.gravity.y = CONFIG.gravity * this.items.getGravityMultiplier(this.grappleAnchor !== null);
+    const wasGrounded = this.isGrounded;
+    const preGroundVelocity = this.playerBody.linvel();
+    if (!wasGrounded) this.peakFallSpeed = Math.max(this.peakFallSpeed, Math.max(0, -preGroundVelocity.y));
     this.updateGroundedState();
+    if (!wasGrounded && this.isGrounded) {
+      this.triggerParkourLanding(
+        this.peakFallSpeed,
+        Math.hypot(preGroundVelocity.x, preGroundVelocity.z),
+        preGroundVelocity.x,
+        preGroundVelocity.z,
+      );
+      this.peakFallSpeed = 0;
+    } else if (this.isGrounded) this.peakFallSpeed = 0;
     if (this.dashTimeRemaining > 0) {
       this.dashTimeRemaining = Math.max(0, this.dashTimeRemaining - dt);
       const thrustRatio = this.dashDuration > 0 ? this.dashTimeRemaining / this.dashDuration : 0;
@@ -552,6 +580,23 @@ export class Game {
     }
   }
 
+  private triggerParkourLanding(
+    fallSpeed: number,
+    horizontalSpeed: number,
+    velocityX: number,
+    velocityZ: number,
+  ): void {
+    if (fallSpeed < 5.8) return;
+    this.landingIntensity = clamp((fallSpeed - 4.5) / 22 + horizontalSpeed / 160, 0.28, 1);
+    this.landingTimer = this.landingDuration;
+    const lateralVelocity = velocityX * Math.cos(this.yaw) - velocityZ * Math.sin(this.yaw);
+    this.landingSide = Math.abs(lateralVelocity) > 0.45
+      ? Math.sign(lateralVelocity)
+      : Math.random() > 0.5 ? 1 : -1;
+    this.shake = Math.max(this.shake, 0.32 + this.landingIntensity * 0.42);
+    this.audio.land(this.landingIntensity);
+  }
+
   private updateGroundedState(): void {
     const translation = this.playerBody.translation();
     this.groundRay.origin.x = translation.x;
@@ -627,6 +672,14 @@ export class Game {
     this.shake = Math.max(this.shake, initialLaunch ? 0.82 : 1.08);
     this.audio.dash(charge);
     if (!initialLaunch) this.showToast(`${Math.round(charge * 100)}%\nGAS BURST`, 'positive');
+    if (!initialLaunch && dashMultiplier > 1) {
+      this.showItemProc(
+        'boost',
+        '제트팩 증폭',
+        `THRUST +${Math.round((dashMultiplier - 1) * 100)}%`,
+        ['jetpack'],
+      );
+    }
   }
 
   private tryJumpBoost(): void {
@@ -667,6 +720,14 @@ export class Game {
     this.shake = Math.max(this.shake, 1.04);
     this.audio.jumpBoost(charge);
     this.showToast(`${Math.round(charge * 100)}%\nVERTICAL BURST`, 'positive');
+    if (boostMultiplier > 1) {
+      this.showItemProc(
+        'boost',
+        '제트팩 증폭',
+        `VERTICAL THRUST +${Math.round((boostMultiplier - 1) * 100)}%`,
+        ['jetpack'],
+      );
+    }
   }
 
   private updateCamera(dt: number): void {
@@ -685,17 +746,26 @@ export class Game {
     const step = Math.sin(this.groundRunPhase);
     const bobY = Math.abs(step) * 0.082 * this.groundRunBlend;
     const bobSide = Math.sin(this.groundRunPhase * 0.5) * 0.034 * this.groundRunBlend;
+    const landingProgress = this.landingTimer > 0
+      ? 1 - this.landingTimer / this.landingDuration
+      : 1;
+    const landingArc = this.landingTimer > 0
+      ? Math.sin(landingProgress * Math.PI) * this.landingIntensity
+      : 0;
+    const landingRoll = this.landingTimer > 0
+      ? Math.sin(landingProgress * Math.PI * 1.15) * this.landingSide * this.landingIntensity
+      : 0;
     const rightX = Math.cos(this.yaw);
     const rightZ = -Math.sin(this.yaw);
     this.camera.position.set(
       translation.x + rightX * bobSide + (Math.random() - 0.5) * shakeAmount,
-      translation.y + 0.18 + bobY + (Math.random() - 0.5) * shakeAmount,
+      translation.y + 0.18 + bobY - landingArc * 0.32 + (Math.random() - 0.5) * shakeAmount,
       translation.z + rightZ * bobSide + (Math.random() - 0.5) * shakeAmount,
     );
     this.camera.rotation.set(
-      this.pitch + Math.cos(this.groundRunPhase * 2) * 0.006 * this.groundRunBlend,
+      this.pitch + Math.cos(this.groundRunPhase * 2) * 0.006 * this.groundRunBlend + landingArc * 0.048,
       this.yaw,
-      -step * 0.009 * this.groundRunBlend,
+      -step * 0.009 * this.groundRunBlend + landingRoll * 0.095,
     );
     this.camera.getWorldDirection(this.cameraForward);
 
@@ -709,7 +779,8 @@ export class Game {
     );
     const targetFov = 74
       + clamp((speed - 16) / 38, 0, 1) * 10
-      + this.dashFx * 14;
+      + this.dashFx * 14
+      + landingArc * 2.4;
     const nextFov = THREE.MathUtils.damp(this.camera.fov, targetFov, 6, dt);
     if (Math.abs(nextFov - this.camera.fov) > 0.01) {
       this.camera.fov = nextFov;
@@ -719,8 +790,10 @@ export class Game {
     this.recoil = THREE.MathUtils.damp(this.recoil, 0, 18, dt);
     this.leftKick = THREE.MathUtils.damp(this.leftKick, 0, 12, dt);
     this.weaponRig.position.y = Math.sin(performance.now() * 0.008) * Math.min(0.012, speed * 0.00035)
-      - bobY * 0.5;
+      - bobY * 0.5 - landingArc * 0.17;
     this.weaponRig.position.x = -bobSide * 0.42;
+    const idleWeaponRoll = this.mode === 'playing' ? 0 : Math.sin(performance.now() * 0.001) * 0.005;
+    this.weaponRig.rotation.z = idleWeaponRoll - landingRoll * 0.28;
     const rightDevice = this.weaponRig.getObjectByName('right-device');
     const leftDevice = this.weaponRig.getObjectByName('left-device');
     if (rightDevice) {
@@ -737,6 +810,7 @@ export class Game {
       jet.scale.set(0.9 + this.dashFx * 0.28, flicker * (1.1 + this.dashFx * 0.58), 0.9 + this.dashFx * 0.28);
       jet.material.opacity = 0.3 + Math.random() * 0.18;
     }
+    this.landingTimer = Math.max(0, this.landingTimer - dt);
   }
 
   private updateAnchorSelection(dt: number): void {
@@ -1075,6 +1149,9 @@ export class Game {
       'positive',
     );
     this.audio.gold();
+    if (restored > 0) {
+      this.showItemProc('heal', '체력 회복', `+${Math.round(restored)} HP · MEDKIT`, []);
+    }
     this.clearCombatMarker({ type: 'health', id: result.targetId });
   }
 
@@ -1082,15 +1159,16 @@ export class Game {
     type: 'bomb' | 'drone',
     result: BombDamageResult | DroneDamageResult,
     quality: AimQuality = 'perfect',
+    countAsWeaponHit = true,
   ): void {
     const playHitSound = this.impactTimer <= 0;
-    this.stats.hits += 1;
+    if (countAsWeaponHit) this.stats.hits += 1;
     this.impactTimer = quality === 'perfect' ? 0.17 : 0.1;
     this.shake = Math.max(this.shake, quality === 'perfect' ? 0.48 : 0.22);
     if (type === 'drone') {
       this.showDamageNumber(result.position, result.damageDealt, quality, result.destroyed);
     }
-    if (playHitSound && type === 'drone') this.audio.droneHit();
+    if (type === 'drone') this.audio.droneHit();
     else if (playHitSound && !result.destroyed) this.audio.hit();
     if (!result.destroyed) return;
     this.stats.combo += type === 'bomb' ? 3 : 2;
@@ -1104,11 +1182,7 @@ export class Game {
     );
     this.punchCombo();
     this.clearCombatMarker({ type, id: result.targetId });
-    if (type === 'bomb') {
-      this.audio.defuse();
-    } else {
-      this.audio.gold();
-    }
+    this.audio.defuse();
   }
 
   private getCombatTargetPosition(target: CombatTargetRef): THREE.Vector3 | null {
@@ -1153,96 +1227,6 @@ export class Game {
     if (this.activeCombatTarget?.type === target.type && this.activeCombatTarget.id === target.id) {
       this.activeCombatTarget = null;
     }
-  }
-
-  private useSecondary(): void {
-    if (this.mode !== 'playing' || this.secondaryCooldown > 0) return;
-    const weapon = this.items.getSecondaryStats();
-    if (!weapon) {
-      this.showToast('AUX EMPTY\nSELECT SECONDARY', 'negative');
-      this.audio.denied();
-      this.secondaryCooldown = 0.45;
-      return;
-    }
-    this.secondaryCooldown = weapon.cooldown;
-    if (weapon.id === 'katana') {
-      const range = 8.5 + weapon.level * 0.8;
-      const drone = this.drones.findNearestTarget(this.playerPosition, range);
-      const bomb = this.targets.findNearestBomb(this.playerPosition, range);
-      const options = [
-        drone ? { type: 'drone' as const, id: drone.id, position: drone.position } : null,
-        bomb ? { type: 'bomb' as const, id: bomb.id, position: bomb.position } : null,
-      ].filter((value): value is { type: 'drone' | 'bomb'; id: number; position: THREE.Vector3 } => value !== null);
-      options.sort((a, b) => a.position.distanceToSquared(this.playerPosition) - b.position.distanceToSquared(this.playerPosition));
-      const target = options[0];
-      if (!target) {
-        this.showToast('OUT OF RANGE\nKATANA', 'negative');
-        this.audio.denied();
-        return;
-      }
-      const direction = target.position.clone().sub(this.camera.position).normalize();
-      if (direction.dot(this.cameraForward) < 0.28) {
-        this.showToast('FACE TARGET\nKATANA', 'negative');
-        this.audio.denied();
-        return;
-      }
-      const result = target.type === 'drone'
-        ? this.drones.damageDroneById(target.id, weapon.damage)
-        : this.targets.detonateBombById(target.id);
-      if (result) this.handleCombatDamage(target.type, result, 'perfect');
-      this.shake = 1;
-      this.showTracer(this.camera.position, target.position);
-      return;
-    }
-
-    const muzzlePosition = new THREE.Vector3();
-    this.rightMuzzle.getWorldPosition(muzzlePosition);
-    if (weapon.id === 'missile') {
-      const fallbackDrone = this.drones.findNearestTarget(this.playerPosition, 120 + weapon.level * 8);
-      const fallbackBomb = this.targets.findNearestBomb(this.playerPosition, 120 + weapon.level * 8);
-      const activeWeaponTarget: { type: 'bomb' | 'drone'; id: number } | null =
-        this.activeCombatTarget?.type === 'bomb' || this.activeCombatTarget?.type === 'drone'
-          ? { type: this.activeCombatTarget.type, id: this.activeCombatTarget.id }
-          : null;
-      const target = activeWeaponTarget
-        ? { type: activeWeaponTarget.type, id: activeWeaponTarget.id }
-        : fallbackDrone
-          ? { type: 'drone' as const, id: fallbackDrone.id }
-          : fallbackBomb
-            ? { type: 'bomb' as const, id: fallbackBomb.id }
-            : undefined;
-      if (!target) {
-        this.showToast('NO TARGET\nMISSILE', 'negative');
-        this.audio.denied();
-        return;
-      }
-      const missile = new THREE.Mesh(this.missileGeometry, this.missileMaterial);
-      missile.rotation.x = Math.PI / 2;
-      missile.position.copy(muzzlePosition);
-      this.scene.add(missile);
-      this.playerProjectiles.push({
-        mesh: missile,
-        velocity: this.cameraForward.clone().multiplyScalar(48),
-        damage: weapon.damage,
-        life: 5.5,
-        kind: 'missile',
-        target,
-        homingStrength: 3.8 + weapon.level * 0.72,
-      });
-      return;
-    }
-
-    const bomb = new THREE.Mesh(this.airBombGeometry, this.airBombMaterial);
-    bomb.position.copy(muzzlePosition);
-    this.scene.add(bomb);
-    this.playerProjectiles.push({
-      mesh: bomb,
-      velocity: this.cameraForward.clone().multiplyScalar(38),
-      damage: weapon.damage,
-      life: 1.25,
-      kind: 'air-bomb',
-      blastRadius: 13 + weapon.level * 1.6,
-    });
   }
 
   private updatePlayerProjectiles(dt: number): void {
@@ -1333,15 +1317,45 @@ export class Game {
     this.audio.fall();
   }
 
-  private takeDamage(rawDamage: number, source: string): void {
+  private takeDamage(rawDamage: number, source: string, attackerId?: number): void {
     if (this.mode !== 'playing' || this.invulnerabilityTimer > 0 || rawDamage <= 0) return;
-    const damage = Math.max(1, rawDamage * (1 - this.items.getDamageReduction()));
+    const damageReduction = this.items.getDamageReduction();
+    const damage = Math.max(1, rawDamage * (1 - damageReduction));
+    const prevented = Math.max(0, rawDamage - damage);
     this.health = Math.max(0, this.health - damage);
     this.stats.combo = 0;
     this.damageTimer = 0.38;
     this.shake = Math.max(this.shake, 0.76);
     this.showToast(`-${Math.round(damage)} HP\n${source}`, 'negative');
+    if (prevented >= 0.5) {
+      const contributors: string[] = [];
+      if (this.items.getDamageGuardReduction() > 0) contributors.push('damage_guard');
+      if (this.items.getArmorDamageReduction() > 0) contributors.push('armor');
+      this.showItemProc(
+        'defense',
+        '데미지 감소',
+        `-${Math.round(prevented)} DAMAGE · ${Math.round(damageReduction * 100)}% CUT`,
+        contributors,
+      );
+    }
     if (source === 'DRONE FIRE') this.audio.playerHit();
+
+    const siphonRatio = this.items.getBloodSiphonRatio();
+    if (attackerId !== undefined && siphonRatio > 0) {
+      const siphonResult = this.drones.damageDroneById(attackerId, damage * siphonRatio);
+      if (siphonResult) {
+        const previousHealth = this.health;
+        this.health = Math.min(this.maxHealth, this.health + siphonResult.damageDealt);
+        const restored = Math.max(0, this.health - previousHealth);
+        this.handleCombatDamage('drone', siphonResult, 'perfect', false);
+        this.showItemProc(
+          'siphon',
+          '피흡 반격',
+          `+${Math.round(restored)} HP · ${Math.round(siphonResult.damageDealt)} DAMAGE RETURN`,
+          ['blood_siphon'],
+        );
+      }
+    }
     if (this.health <= 0) this.finishRun();
   }
 
@@ -1351,8 +1365,13 @@ export class Game {
     this.rightHeld = false;
     this.keys.clear();
     this.detach();
-    this.audio.setPaused(true);
+    this.audio.setIntermission(true);
     this.upgradeOffers = this.items.rollOffers(3);
+    this.selectedUpgradeIndex = null;
+    this.hud.upgradeConfirmBar.classList.add('hidden');
+    this.hud.upgradeReplaceWarning.classList.add('hidden');
+    this.hud.upgradeReplaceCheck.checked = false;
+    this.hud.upgradeConfirmButton.disabled = true;
     this.hud.upgradeStage.textContent = `STAGE ${String(this.stage + 1).padStart(2, '0')}`;
     this.hud.upgradeReels.classList.add('rolling');
     this.hud.upgradeScreen.classList.remove('hidden');
@@ -1369,7 +1388,8 @@ export class Game {
     }
     card.disabled = false;
     const { definition } = offer;
-    card.className = `item-card category-${definition.category}`;
+    card.className = `item-card category-${definition.category} status-${offer.status.toLowerCase()}`;
+    card.setAttribute('aria-pressed', 'false');
     card.classList.toggle('will-replace', Boolean(offer.replacedItem));
     card.classList.toggle('is-upgrade', offer.status === 'UPGRADE');
     card.style.setProperty('--item-color', definition.color);
@@ -1383,28 +1403,85 @@ export class Game {
     if (category) category.textContent = definition.category.toUpperCase();
     if (status) {
       status.textContent = offer.status === 'NEW'
-        ? 'NEW GEAR'
+        ? 'NEW'
         : offer.status === 'UPGRADE'
-          ? 'LEVEL UP'
+          ? 'UPGRADE'
           : offer.status === 'REPLACE'
             ? 'REPLACE'
-            : 'INSTANT USE';
+            : 'USE';
     }
     if (name) name.textContent = definition.name;
     if (level) level.textContent = definition.maxLevel === 0 ? 'ONE SHOT' : `LV.${offer.nextLevel}`;
     if (description) description.textContent = definition.description;
-    if (stats) stats.textContent = this.items.describeOffer(offer);
+    if (stats) this.renderItemStats(stats, this.items.getOfferStatComparisons(offer));
     if (replace) {
       replace.textContent = offer.replacedItem
-        ? `REPLACEMENT REQUIRED // ${offer.replacedItem.name}`
+        ? `REPLACE // ${offer.replacedItem.name}`
         : definition.slot === 'primary'
-          ? 'PRIMARY WEAPON SLOT // RMB'
+          ? 'PRIMARY // RMB'
           : definition.slot === 'secondary'
-            ? 'SECONDARY WEAPON SLOT // E'
+            ? 'SECONDARY'
             : definition.slot === 'equipment'
-              ? 'EQUIPMENT SLOT // ONE ONLY'
-              : 'PASSIVE SLOT // STACKABLE';
+              ? 'EQUIPMENT // ONE SLOT'
+              : 'PASSIVE // STACKABLE';
     }
+  }
+
+  private renderItemStats(host: HTMLElement, comparisons: ItemStatComparison[]): void {
+    host.replaceChildren();
+    for (const comparison of comparisons) {
+      const row = document.createElement('div');
+      const improved = comparison.lowerIsBetter
+        ? comparison.next < comparison.current
+        : comparison.next > comparison.current;
+      row.className = `item-stat-box ${comparison.loss ? 'loss' : improved ? 'gain' : 'steady'}`;
+      const header = document.createElement('div');
+      header.className = 'item-stat-head';
+      const label = document.createElement('span');
+      label.textContent = comparison.label;
+      const value = document.createElement('strong');
+      const format = (amount: number): string => amount.toFixed(comparison.decimals ?? 0);
+      value.textContent = `${format(comparison.current)}${comparison.unit} → ${format(comparison.next)}${comparison.unit}`;
+      header.append(label, value);
+      const track = document.createElement('div');
+      track.className = 'item-stat-track';
+      const ceiling = Math.max(0.001, comparison.max, comparison.current, comparison.next);
+      const before = document.createElement('i');
+      before.className = 'item-stat-before';
+      before.style.width = `${clamp(comparison.current / ceiling, 0, 1) * 100}%`;
+      const after = document.createElement('i');
+      after.className = 'item-stat-after';
+      after.style.width = `${clamp(comparison.next / ceiling, 0, 1) * 100}%`;
+      track.append(before, after);
+      row.append(header, track);
+      host.append(row);
+    }
+  }
+
+  private previewUpgradeSelection(index: number): void {
+    if (this.mode !== 'upgrade') return;
+    const offer = this.upgradeOffers[index];
+    if (!offer) return;
+    this.selectedUpgradeIndex = index;
+    this.hud.itemCards.forEach((card, cardIndex) => {
+      const selected = cardIndex === index;
+      card.classList.toggle('selected', selected);
+      card.setAttribute('aria-pressed', String(selected));
+    });
+    this.hud.upgradeConfirmBar.classList.remove('hidden');
+    this.hud.upgradeConfirmEyebrow.textContent = offer.status === 'REPLACE'
+      ? 'LOADOUT CHANGE SELECTED'
+      : `${offer.status} SELECTED`;
+    this.hud.upgradeConfirmName.textContent = offer.definition.name;
+    this.hud.upgradeConfirmSummary.textContent = offer.definition.description;
+    this.hud.upgradeReplaceCheck.checked = false;
+    const requiresWarning = Boolean(offer.replacedItem);
+    this.hud.upgradeReplaceWarning.classList.toggle('hidden', !requiresWarning);
+    this.hud.upgradeConfirmButton.disabled = requiresWarning;
+    this.hud.upgradeConfirmButton.textContent = requiresWarning ? 'ACKNOWLEDGE & EQUIP' : 'CONFIRM LOADOUT';
+    if (offer.replacedItem) {
+      this.hud.upgradeReplaceText.textContent = `현재 장비 [${offer.replacedItem.name}] → [${offer.definition.name}]. 교체에 동의합니다.`;
+    } else this.hud.upgradeReplaceText.textContent = '';
   }
 
   private getStageScoreGate(stage: number): number {
@@ -1417,6 +1494,8 @@ export class Game {
     if (this.mode !== 'upgrade') return;
     const offer = this.upgradeOffers[index];
     if (!offer) return;
+    if (this.selectedUpgradeIndex !== index) return;
+    if (offer.replacedItem && !this.hud.upgradeReplaceCheck.checked) return;
     const result = this.items.applyOffer(offer);
     const previousMaxHealth = this.maxHealth;
     this.maxHealth = CONFIG.playerBaseHealth
@@ -1425,7 +1504,9 @@ export class Game {
     const armorCapacityHeal = result.definition.id === 'armor'
       ? Math.max(0, this.maxHealth - previousMaxHealth)
       : 0;
+    const previousHealth = this.health;
     this.health = clamp(this.health + result.instantHeal + armorCapacityHeal, 0, this.maxHealth);
+    const restoredHealth = Math.max(0, this.health - previousHealth);
     this.stage += 1;
     this.nextStageScore = this.getStageScoreGate(this.stage);
     this.invulnerabilityTimer = CONFIG.stageTransitionDuration;
@@ -1434,8 +1515,11 @@ export class Game {
     this.secondaryCooldown = 0;
     this.mode = 'playing';
     this.hud.upgradeScreen.classList.add('hidden');
+    this.hud.upgradeConfirmBar.classList.add('hidden');
+    this.selectedUpgradeIndex = null;
     this.itemPreviews.hide();
     this.updateInventoryHud();
+    this.audio.setIntermission(false);
     this.audio.setPaused(false);
     this.audio.resume();
     const launch = this.cameraForward.clone();
@@ -1444,6 +1528,14 @@ export class Game {
     launch.normalize().multiplyScalar(31 * this.items.getSpeedMultiplier());
     this.playerBody.setLinvel({ x: launch.x, y: launch.y, z: launch.z }, true);
     this.showToast(`STAGE ${String(this.stage).padStart(2, '0')}\n${result.definition.name}`, 'positive');
+    if (restoredHealth > 0) {
+      this.showItemProc(
+        'heal',
+        result.instantMaxHealth > 0 ? '최대 체력 확장' : '체력 회복',
+        `+${Math.round(restoredHealth)} HP`,
+        [result.definition.id],
+      );
+    }
     this.requestPlayLock();
   }
 
@@ -1452,6 +1544,7 @@ export class Game {
     for (const item of this.items.getOwnedItems()) {
       const icon = document.createElement('div');
       icon.className = `inventory-item category-${item.definition.category}`;
+      icon.dataset.itemId = item.definition.id;
       icon.style.setProperty('--item-color', item.definition.color);
       icon.title = `${item.definition.name} LV.${item.level}`;
       icon.innerHTML = `<span class="inventory-name">${item.definition.name}</span><b class="inventory-level"><small>LEVEL</small>${item.level}</b>`;
@@ -1464,6 +1557,14 @@ export class Game {
     this.resetTouchControls();
     this.stats = this.blankStats();
     this.elapsedTime = 0;
+    this.itemGlideFeedbackTimer = 0;
+    this.itemSpeedFeedbackTimer = 0;
+    this.itemGliding = false;
+    this.itemSpeedActive = false;
+    this.hud.itemProcLayer.replaceChildren();
+    this.hud.itemProcLayer.classList.remove('glide-active', 'wash-active');
+    if (this.itemProcWashTimeout !== null) window.clearTimeout(this.itemProcWashTimeout);
+    this.itemProcWashTimeout = null;
     this.stage = 1;
     this.nextStageScore = this.getStageScoreGate(1);
     this.items.reset();
@@ -1482,6 +1583,7 @@ export class Game {
     this.drones.reset();
     while (this.playerProjectiles.length > 0) this.removePlayerProjectile(this.playerProjectiles.length - 1);
     this.resetPlayer();
+    this.audio.setIntermission(false);
     this.audio.resume();
     this.tryDash(true);
     this.updateInventoryHud();
@@ -1495,6 +1597,7 @@ export class Game {
     this.mode = 'over';
     this.rightHeld = false;
     this.resetTouchControls();
+    this.audio.setIntermission(false);
     this.audio.setPaused(true);
     this.dashTimeRemaining = 0;
     this.detach();
@@ -1529,6 +1632,9 @@ export class Game {
     for (const jet of this.dashJets) jet.visible = false;
     this.yaw = 0;
     this.pitch = -0.05;
+    this.peakFallSpeed = 0;
+    this.landingTimer = 0;
+    this.landingIntensity = 0;
     this.playerBody.setTranslation({ x: 0, y: 18, z: 30 }, true);
     this.playerBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.playerBody.resetForces(true);
@@ -1578,8 +1684,16 @@ export class Game {
       if (event.code === 'Space') event.preventDefault();
       if (event.code === 'KeyQ' && !event.repeat) this.tryDash();
       if (event.code === 'Space' && !event.repeat) this.tryJumpBoost();
-      if (event.code === 'KeyE' && !event.repeat) this.useSecondary();
-      if (import.meta.env.DEV && event.code === 'KeyU' && !event.repeat && this.mode === 'playing') {
+      if (
+        import.meta.env.DEV
+        && event.code === 'KeyU'
+        && !event.repeat
+        && (this.mode === 'playing' || this.mode === 'paused')
+      ) {
+        if (this.mode === 'paused') {
+          this.mode = 'playing';
+          this.hud.menu.classList.add('hidden');
+        }
         this.stats.score = this.nextStageScore;
         this.enterUpgradeSelection();
       }
@@ -1619,7 +1733,17 @@ export class Game {
       this.requestPlayLock();
     });
     this.hud.itemCards.forEach((card, index) => {
-      card.addEventListener('click', () => this.selectUpgrade(index));
+      card.addEventListener('click', () => this.previewUpgradeSelection(index));
+    });
+    this.hud.upgradeReplaceCheck.addEventListener('change', () => {
+      const offer = this.selectedUpgradeIndex === null
+        ? undefined
+        : this.upgradeOffers[this.selectedUpgradeIndex];
+      this.hud.upgradeConfirmButton.disabled = Boolean(offer?.replacedItem)
+        && !this.hud.upgradeReplaceCheck.checked;
+    });
+    this.hud.upgradeConfirmButton.addEventListener('click', () => {
+      if (this.selectedUpgradeIndex !== null) this.selectUpgrade(this.selectedUpgradeIndex);
     });
 
     if (this.touchControlsEnabled) this.bindTouchControls();
@@ -1655,7 +1779,6 @@ export class Game {
     const lookZone = requiredElement('touchLookZone');
     const grappleButton = requiredElement<HTMLButtonElement>('touchGrapple');
     const fireButton = requiredElement<HTMLButtonElement>('touchFire');
-    const secondaryButton = requiredElement<HTMLButtonElement>('touchSecondary');
     const dashButton = requiredElement<HTMLButtonElement>('touchDash');
     const jumpButton = requiredElement<HTMLButtonElement>('touchJump');
     const pauseButton = requiredElement<HTMLButtonElement>('touchPause');
@@ -1778,7 +1901,6 @@ export class Game {
       },
       () => { this.rightHeld = false; },
     );
-    bindHoldButton(secondaryButton, () => this.useSecondary(), () => undefined);
     bindHoldButton(dashButton, () => this.tryDash(), () => undefined);
     bindHoldButton(jumpButton, () => this.tryJumpBoost(), () => undefined);
 
@@ -1853,6 +1975,51 @@ export class Game {
       'critical',
       this.mode === 'playing' && this.health / Math.max(1, this.maxHealth) <= 0.25,
     );
+    this.updateItemActivityFeedback(dt);
+  }
+
+  private updateItemActivityFeedback(dt: number): void {
+    this.itemGlideFeedbackTimer = Math.max(0, this.itemGlideFeedbackTimer - dt);
+    this.itemSpeedFeedbackTimer = Math.max(0, this.itemSpeedFeedbackTimer - dt);
+    const velocity = this.playerBody.linvel();
+    const gravityCut = this.items.getGravityCutReduction();
+    const wingsuitCut = this.items.getWingsuitGravityReduction();
+    const totalGlideCut = Math.min(0.52, gravityCut + wingsuitCut);
+    const gliding = this.mode === 'playing'
+      && !this.isGrounded
+      && !this.grappleAnchor
+      && this.dashTimeRemaining <= 0
+      && velocity.y <= 1.5
+      && totalGlideCut > 0;
+    this.hud.itemProcLayer.classList.toggle('glide-active', gliding);
+    if (gliding && (!this.itemGliding || this.itemGlideFeedbackTimer <= 0)) {
+      const contributors: string[] = [];
+      if (gravityCut > 0) contributors.push('gravity_cut');
+      if (wingsuitCut > 0) contributors.push('wingsuit');
+      this.showItemProc(
+        'glide',
+        wingsuitCut > 0 ? '활공 보조' : '반중력 가동',
+        `GRAVITY -${Math.round(totalGlideCut * 100)}%`,
+        contributors,
+      );
+      this.itemGlideFeedbackTimer = 4.6;
+    }
+    this.itemGliding = gliding;
+
+    const speedBonus = this.items.getSpeedBonus();
+    const hasMoveInput = this.keys.has('KeyW') || this.keys.has('KeyA')
+      || this.keys.has('KeyS') || this.keys.has('KeyD');
+    const speedActive = this.mode === 'playing' && hasMoveInput && speedBonus > 0;
+    if (speedActive && (!this.itemSpeedActive || this.itemSpeedFeedbackTimer <= 0)) {
+      this.showItemProc(
+        'speed',
+        '신경 가속',
+        `MOVE SPEED +${Math.round(speedBonus * 100)}%`,
+        ['speed_boost'],
+      );
+      this.itemSpeedFeedbackTimer = 5.2;
+    }
+    this.itemSpeedActive = speedActive;
   }
 
   private showTracer(start: THREE.Vector3, end: THREE.Vector3): void {
@@ -1881,11 +2048,59 @@ export class Game {
     const number = document.createElement('div');
     number.className = `damage-number ${quality} ${destroyed ? 'destroyed' : ''}`;
     number.style.left = `${(this.damageProjection.x * 0.5 + 0.5) * 100}%`;
-    number.style.top = `${(-this.damageProjection.y * 0.5 + 0.5) * 100}%`;
+    number.style.top = `${clamp((-this.damageProjection.y * 0.5 + 0.5) * 100 - 6.5, 6, 88)}%`;
     number.style.setProperty('--damage-drift', `${(Math.random() - 0.5) * 34}px`);
     number.innerHTML = `<strong>-${Math.max(1, Math.round(damage))}</strong><span>${destroyed ? 'BREAK' : quality === 'perfect' ? 'DIRECT' : 'GRAZE'}</span>`;
     this.hud.damageNumbers.append(number);
     window.setTimeout(() => number.remove(), 720);
+  }
+
+  private showItemProc(
+    kind: 'defense' | 'glide' | 'heal' | 'siphon' | 'speed' | 'boost',
+    title: string,
+    detail: string,
+    itemIds: string[],
+  ): void {
+    const procColors: Record<typeof kind, string> = {
+      defense: '75, 192, 255',
+      glide: '190, 199, 207',
+      heal: '67, 255, 153',
+      siphon: '255, 76, 148',
+      speed: '255, 218, 74',
+      boost: '255, 147, 55',
+    };
+    this.hud.itemProcLayer.style.setProperty('--proc-rgb', procColors[kind]);
+    this.hud.itemProcLayer.classList.remove('wash-active');
+    void this.hud.itemProcLayer.offsetWidth;
+    this.hud.itemProcLayer.classList.add('wash-active');
+    if (this.itemProcWashTimeout !== null) window.clearTimeout(this.itemProcWashTimeout);
+    this.itemProcWashTimeout = window.setTimeout(() => {
+      this.hud.itemProcLayer.classList.remove('wash-active');
+      this.itemProcWashTimeout = null;
+    }, 780);
+    while (this.hud.itemProcLayer.childElementCount >= 3) {
+      this.hud.itemProcLayer.firstElementChild?.remove();
+    }
+    const proc = document.createElement('div');
+    proc.className = `item-proc ${kind}`;
+    const eyebrow = document.createElement('span');
+    eyebrow.textContent = kind === 'heal' ? 'RECOVERY TRIGGER' : kind === 'siphon' ? 'COUNTER TRIGGER' : 'PASSIVE TRIGGER';
+    const heading = document.createElement('strong');
+    heading.textContent = title;
+    const stats = document.createElement('em');
+    stats.textContent = detail;
+    proc.append(eyebrow, heading, stats);
+    this.hud.itemProcLayer.append(proc);
+    for (const itemId of itemIds) {
+      for (const item of this.hud.inventoryBar.querySelectorAll<HTMLElement>('.inventory-item')) {
+        if (item.dataset.itemId !== itemId) continue;
+        item.classList.remove('proc-active');
+        void item.offsetWidth;
+        item.classList.add('proc-active');
+        window.setTimeout(() => item.classList.remove('proc-active'), 850);
+      }
+    }
+    window.setTimeout(() => proc.remove(), 1750);
   }
 
   private showToast(message: string, kind: 'positive' | 'negative'): void {
@@ -2108,6 +2323,7 @@ export class Game {
       bombMarkers: requiredElement('bombMarkers'),
       enemyMarkers: requiredElement('enemyMarkers'),
       damageNumbers: requiredElement('damageNumbers'),
+      itemProcLayer: requiredElement('itemProcLayer'),
       inventoryBar: requiredElement('inventoryBar'),
       toast: requiredElement('toast'),
       hitFlash: requiredElement('hitFlash'),
@@ -2132,6 +2348,14 @@ export class Game {
       upgradeStage: requiredElement('upgradeStageValue'),
       upgradeReels: requiredElement('upgradeReels'),
       itemCards: Array.from(document.querySelectorAll<HTMLButtonElement>('.item-card')),
+      upgradeConfirmBar: requiredElement('upgradeConfirmBar'),
+      upgradeConfirmEyebrow: requiredElement('upgradeConfirmEyebrow'),
+      upgradeConfirmName: requiredElement('upgradeConfirmName'),
+      upgradeConfirmSummary: requiredElement('upgradeConfirmSummary'),
+      upgradeReplaceWarning: requiredElement('upgradeReplaceWarning'),
+      upgradeReplaceCheck: requiredElement<HTMLInputElement>('upgradeReplaceCheck'),
+      upgradeReplaceText: requiredElement('upgradeReplaceText'),
+      upgradeConfirmButton: requiredElement<HTMLButtonElement>('upgradeConfirmButton'),
     };
   }
 
