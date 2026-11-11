@@ -260,16 +260,20 @@ function updatePreloadProgress(done,total){
  $('preload-fill').style.width=(total?Math.min(100,Math.round(done/total*100)):100)+'%';
  $('preload-count').textContent=done+' / '+total+'개 이미지 · '+(total?Math.round(done/total*100):100)+'%';
 }
-function preloadOneMedia(url,timeout=12500){
+function preloadOneMedia(url,timeout=14000){
  return new Promise(resolve=>{
   let finished=false;const im=new Image();
-  im.referrerPolicy='no-referrer';im.decoding='async';
+  im.referrerPolicy='no-referrer';im.decoding='async';im.loading='eager';
   const timer=setTimeout(()=>finish(false),timeout);
-  function finish(ok){if(finished)return;finished=true;clearTimeout(timer);im.onload=null;im.onerror=null;
-    preloadStatus.set(url,ok);if(ok){preloadCache.set(url,im);preloadFailureURLs.delete(url)}
+  function finish(ok){
+    if(finished)return;finished=true;clearTimeout(timer);im.onload=null;im.onerror=null;
+    preloadStatus.set(url,ok);
+    if(ok){preloadCache.set(url,im);preloadFailureURLs.delete(url)}
     else {preloadCache.delete(url);preloadFailureURLs.add(url);im.src='';}
-    resolve(ok);}
-  im.onload=()=>finish(true);im.onerror=()=>finish(false);im.src=url;
+    resolve(ok);
+  }
+  im.onload=()=>finish(im.naturalWidth>=80 && im.naturalHeight>=60);
+  im.onerror=()=>finish(false);im.src=url;
  });
 }
 async function preloadAllMedia(urls){
@@ -293,30 +297,53 @@ async function preloadAllMedia(urls){
 function retryFailedMedia(){preloadAllMedia([...preloadFailureURLs])}
 function enterDeck(){$('preloader').classList.add('hidden');render();showControls();}
 function startDeck(){
- const urls=DATA.flatMap(slide=>slide.assets.filter(a=>a.url&&a.kind!=='tenor').map(a=>a.url));
+ const urls=DATA.flatMap(slide=>slide.assets.filter(a=>a.url&&a.kind!=='tenor').flatMap(a=>a.fallbackUrl?[a.url,a.fallbackUrl]:[a.url]));
  if(!urls.length){enterDeck();return}
  preloadAllMedia(urls);
 }
 
 function assetNode(a){
  const d=document.createElement('div');d.className='item film';
- if(preloadStatus.get(a.url)===false){
-  const fail=document.createElement('div');fail.className='broken';fail.style.display='flex';
-  fail.innerHTML='<b>원본 장면을 불러오지 못했습니다</b><p>이미지 제공처의 연결 오류 또는 차단입니다.</p><a target="_blank" rel="noopener" href="'+esc(a.source)+'">원본 출처 열기 ↗</a>';
-  d.appendChild(fail);return d;
+ if(isMotion(a)){
+  d.classList.add('motion');
+  const mark=document.createElement('span');mark.className='gif-label';
+  mark.textContent=a.kind==='tenor'?'GIF · 눌러서 재생':'GIF · 움직이는 컷';
+  d.appendChild(mark);
  }
- if(isMotion(a)){d.classList.add('motion');const mark=document.createElement('span');mark.className='gif-label';mark.textContent=a.kind==='tenor'?'GIF · 눌러서 재생':'GIF · 움직이는 컷';d.appendChild(mark);}
- if(a.kind==='tenor'){
-  const widget=document.createElement('div');widget.className='tenor-gif-embed';widget.dataset.postid=a.url.split('/').pop();widget.dataset.shareMethod='host';widget.dataset.aspectRatio='1.77';widget.dataset.width='100%';widget.style.width='100%';widget.style.maxWidth='100%';
-  d.appendChild(widget);return d;
+ function showFailure(reason){
+   if(d.dataset.failureShown==='yes')return;
+   d.dataset.failureShown='yes';
+   const oldImg=d.querySelector('img');if(oldImg)oldImg.style.display='none';
+   const broken=document.createElement('div');broken.className='broken';
+   broken.style.display='flex';broken.style.position='absolute';broken.style.inset='0';
+   broken.innerHTML='<b>장면을 표시하지 못했습니다</b><p>'+esc(reason)+'</p><a target="_blank" rel="noopener noreferrer" href="'+esc(a.source||a.url)+'">원본 장면 보기 ↗</a>';
+   d.appendChild(broken);
  }
- const im=document.createElement('img');im.alt=a.alt||''; im.referrerPolicy='no-referrer';im.loading='eager';im.decoding='async';
- const broken=document.createElement('div');broken.className='broken'; broken.innerHTML='<b>원본 이미지 연결 필요</b><p>공개 자료의 직접 링크가 차단되었거나 만료됐습니다.</p><a target="_blank" rel="noopener" href="'+esc(a.source)+'">원본 자료 페이지 열기 ↗</a>';
- d.append(im,broken);
- let stage=0;
- im.onerror=()=>{if(stage===0&&a.alt&&a.alt.startsWith('https://')){stage++;im.src=a.alt;return;} broken.style.display='flex';im.style.display='none'};
- im.onload=()=>{broken.style.display='none';im.style.display='block'};
- im.src=a.url;
+ if(a.kind==='tenor'){showFailure('검증되지 않은 외부 GIF 임베드입니다.');return d}
+ const primaryOk=preloadStatus.get(a.url)===true;
+ const fallbackOk=!!(a.fallbackUrl&&preloadStatus.get(a.fallbackUrl)===true);
+ const selectedURL=primaryOk?a.url:(fallbackOk?a.fallbackUrl:null);
+ if(!selectedURL){
+  showFailure('해당 이미지의 사전 로딩에 실패했습니다. 출처에서 원본을 확인할 수 있습니다.');
+  return d;
+ }
+ const cached=preloadCache.get(selectedURL);
+ const im=cached?(cached.isConnected?cached.cloneNode(true):cached):document.createElement('img');
+ im.alt=a.alt||'애니메이션 장면';im.referrerPolicy='no-referrer';im.loading='eager';im.decoding='async';
+ im.style.display='block';
+ let validated=false;
+ const watchdog=setTimeout(()=>showFailure('예상 시간을 초과하여 이미지를 표시할 수 없습니다.'),6000);
+ function checkImage(){
+   if(validated)return;
+   if(im.complete&&im.naturalWidth>=80&&im.naturalHeight>=60){
+     validated=true;clearTimeout(watchdog);
+   }else if(im.complete){validated=true;clearTimeout(watchdog);showFailure('이미지 데이터가 비어 있거나 크기가 비정상적입니다.')}
+ }
+ im.onload=checkImage;
+ im.onerror=()=>{validated=true;clearTimeout(watchdog);showFailure('이미지 표시 과정에서 오류가 발생했습니다.')};
+ d.appendChild(im);
+ if(!cached)im.src=selectedURL;
+ if(im.complete)queueMicrotask(checkImage);
  return d;
 }
 function render(){
