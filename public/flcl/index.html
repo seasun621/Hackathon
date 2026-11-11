@@ -175,6 +175,64 @@ function showToast(message){
  const node=$('toast');node.textContent=message;node.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>node.classList.remove('visible'),3600);
 }
 
+
+function renderDiagram(kind){
+ const p='#f58fbb',b='#81baff',w='#ebedf6',m='#768399';
+ const line=(x1,y1,x2,y2,col,dash)=>'<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+(col||b)+'" stroke-width="3.5" '+(dash?'stroke-dasharray="8 8"':'')+' stroke-linecap="round"/>';
+ const txt=(x,y,caption,size,fill)=>'<text x="'+x+'" y="'+y+'" font-size="'+(size||16)+'" font-weight="600" fill="'+(fill||w)+'" text-anchor="middle">'+esc(caption)+'</text>';
+ const circle=(cx,cy,r,col,op)=>'<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="'+(col||p)+'" opacity="'+(op===undefined?1:op)+'"/>';
+ const rect=(x,y,wi,he,col,fill,dash)=>'<rect x="'+x+'" y="'+y+'" width="'+wi+'" height="'+he+'" rx="7" fill="'+(fill||'none')+'" stroke="'+(col||p)+'" stroke-width="3" '+(dash?'stroke-dasharray="9 6"':'')+'/>';
+ const path=(d,c,dash)=>'<path d="'+d+'" stroke="'+(c||p)+'" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round" '+(dash?'stroke-dasharray="10 9"':'')+' marker-end="url(#arrow)"/>';
+ let core='',label='';
+ if(kind==='freeze'){
+ label='멈춘 화면 · 지속되는 감정';
+ core=rect(32,70,170,184,b)+circle(115,147,42,p,.7)+rect(230,70,170,184,b)+circle(313,147,42,p,.7)+rect(428,70,170,184,b)+circle(511,147,42,p,.7)+txt(315,310,'정지 화면의 연속',19);
+ }else if(kind==='duration'){
+ label='정적 컷의 시간 밀도';
+ core=line(36,230,604,230,m)+rect(48,130,272,79,b,'#223d55')+rect(320,130,90,79,p,'#633346')+rect(412,130,178,79,b,'#223d55')+txt(185,175,'긴 정지',21)+txt(365,175,'변화',16)+txt(502,175,'정지',21)+txt(315,300,'컷의 길이로 감각 조절',19);
+ }else if(kind==='motion'){
+ label='방향 · 속도 · 운동의 궤적';
+ core=circle(90,250,24,p)+circle(310,155,19,p,.8)+circle(530,80,13,p,.65)+path('M90 250 Q250 245 310 155 T525 80',b,true)+line(90,283,530,283,m,true)+txt(300,320,'움직임의 방향을 집중시키다',18);
+ }else if(kind==='axis'){
+ label='시선축 / 180도 규칙';
+ core=circle(150,158,27,p)+circle(490,158,27,b)+line(150,158,490,158,m,true)+circle(236,275,16,w,.7)+circle(410,275,16,w,.7)+path('M236 275 Q315 213 410 275',b)+line(318,40,318,142,p,true)+txt(310,327,'카메라 방향으로 공간 이해',19);
+ }else if(kind==='contrast'){
+ label='정적 → 급격한 동적 연출 → 정적';
+ core=line(34,265,602,265,m)+rect(45,140,165,105,b,'#142638')+rect(239,72,166,173,p,'#48243b')+rect(435,140,165,105,b,'#142638')+txt(126,198,'정적',26)+txt(321,164,'폭발',27)+txt(517,198,'정적',26)+path('M209 190 L239 190',p)+path('M405 190 L435 190',p);
+ }else if(kind==='panel-pan'){
+ label='만화 칸을 가로지르는 카메라';
+ core=rect(43,55,210,115,b)+rect(274,55,315,115,b)+rect(43,193,306,114,b)+rect(370,193,219,114,b)+rect(140,76,314,176,p,'none',true)+path('M112 145 Q260 22 470 110',p,true)+txt(310,343,'컷과 카메라 움직임의 결합',17);
+ }else if(kind==='negative-space'){
+ label='여백을 이용한 시선 집중';
+ core=rect(53,57,520,233,m)+rect(61,66,510,215,b,'none',true)+circle(435,163,42,p,.86)+circle(435,163,69,p,.13)+path('M95 115 Q220 100 330 145',b,true)+txt(315,336,'정보를 지워 주목점 강조',19);
+ }else if(kind==='squash'){
+ label='압축과 팽창 · 스쿼시 앤 스트레치';
+ core=circle(120,163,58,b,.57)+'<ellipse cx="325" cy="190" rx="84" ry="40" fill="'+p+'" opacity=".75"/>'+'<ellipse cx="535" cy="143" rx="40" ry="94" fill="'+b+'" opacity=".65"/>'+path('M195 162 L228 162',p)+path('M428 162 L463 162',p)+txt(110,298,'기본형',19)+txt(325,298,'압축',19)+txt(528,298,'팽창',19);
+ }else if(kind==='layer'){
+ label='이질적인 시각 언어의 병치';
+ core=rect(57,62,380,195,b,'#172b40')+rect(165,110,390,196,p,'#432239',true)+circle(367,165,60,w,.27)+path('M120 110 Q275 26 442 87',b,true)+txt(320,340,'다른 화면 규칙들이 겹친다',19);
+ }else if(kind==='density'){
+ label='프레임 안의 정보량 대비';
+ core=rect(37,65,255,225,b)+rect(345,65,255,225,p);
+ for(let i=0;i<7;i++)core+=circle(75+(i%3)*67,111+Math.floor(i/3)*58,7,b,.7);
+ for(let i=0;i<48;i++)core+=circle(360+(i%8)*31,80+Math.floor(i/8)*36,3.5,p,.7);
+ core+=txt(155,330,'낮은 밀도',18)+txt(475,330,'높은 밀도',18);
+ }else if(kind==='scale'){
+ label='스케일을 통해 동작의 힘 증폭';
+ core=circle(127,166,40,b,.55)+circle(323,166,72,p,.45)+circle(515,166,112,b,.28)+path('M175 168 L226 168',p)+path('M401 168 L432 168',p)+txt(319,332,'크기의 비약이 곧 움직임의 강조',18);
+ }else if(kind==='timeline'){
+ label='이마이시의 연출 활동 · 제작 연대기';
+ const years=[1995,2000,2004,2007,2010,2013,2019,2022,2025];core=line(45,183,594,183,m);
+ for(let i=0;i<years.length;i++){let x=52+i*67;core+=circle(x,183,years[i]===2000?12:8,years[i]===2000?p:b)+txt(x,225,String(years[i]),14,years[i]===2000?p:w);}
+ core+=txt(312,106,'가이낙스 → 감독 데뷔 → 트리거',22);
+ }else{
+ label='화면과 움직임의 구조';
+ core=rect(90,90,460,180,b)+path('M130 220 Q310 65 510 200',p,true);
+ }
+ const arrow='<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6" fill="none" stroke="'+p+'" stroke-width="1.4"/></marker></defs>';
+ return '<div class="diagram-label">'+esc(label)+'</div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="'+esc(label)+'">'+arrow+core+'</svg><div class="diagram-foot">연출 개념도 · 실제 장면 좌표와 무관</div>';
+}
+
 function assetNode(a){
  const d=document.createElement('div');d.className='item film';
  if(isMotion(a)){d.classList.add('motion');const mark=document.createElement('span');mark.className='gif-label';mark.textContent=a.kind==='tenor'?'GIF · 눌러서 재생':'GIF · 움직이는 컷';d.appendChild(mark);}
@@ -191,7 +249,17 @@ function assetNode(a){
  im.src=a.url;
  return d;
 }
-function render(){let s=DATA[at];const stage=$('stage');stage.innerHTML='';stage.className='stage '+s.layout;s.assets.forEach(a=>stage.appendChild(assetNode(a)));
+function render(){
+ let s=DATA[at];const stage=$('stage');
+ stage.innerHTML='';stage.className='stage '+s.layout;
+ if(s.diagram){
+  stage.classList.add('has-diagram');
+  if(s.assets.length>1)stage.classList.add('pair-diagram');
+  const media=document.createElement('div');media.className='media-set';
+  s.assets.forEach((a,i)=>{const item=assetNode(a);if(s.work&&s.work.includes('↔')&&s.assets.length>1)item.dataset.side=i===0?'FLCL · 2000':'GQuuuuuuX · 2025';media.appendChild(item)});
+  const panel=document.createElement('aside');panel.className='diagram-panel';panel.innerHTML=renderDiagram(s.diagram);
+  stage.append(media,panel);
+ }else s.assets.forEach(a=>stage.appendChild(assetNode(a)));
  $('chapter').textContent=PARTS[s.section]||s.section;$('work').textContent=workOf(s);$('scene-title').textContent=titleOf(s);
  const motion=s.assets.some(isMotion);
  $('tag').textContent=motion?'● GIF':(s.tag==='STILL'?'FRAME / REFERENCE':(s.tag==='PERSON'?'PERSON':(s.tag==='CHAPTER'?'CHAPTER':s.tag)));
