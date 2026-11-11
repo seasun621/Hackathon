@@ -182,7 +182,7 @@ function titleOf(s){
  const map={'에반게리온 제16화':'제16화 · 정적과 심리 공간','안노의 레이아웃':'화면 방향과 레이아웃','심리의 형식':'인물의 내면을 화면으로','그 남자 그 여자의 사정':'만화의 문법을 애니메이션으로','실험의 이행':'카레카노에서 FLCL로','FLCL 2000':'애니메이션의 규칙을 다시 조합하다','EP03 — C-131':'제3화 · C-131','EP03 — C-057':'제3화 · C-057','EP03 — C-182':'제3화 · C-182','EP03 — C-249':'제3화 · C-249','EP03 — C-261':'제3화 · C-261','EP03 — C-325':'제3화 · C-325','EP06 — C-077':'제6화 · C-077','EP06 — C-059':'제6화 · C-059','EP06 — C-214':'제6화 · C-214','EP06 — C-243':'제6화 · C-243','EP06 — C-282':'제6화 · C-282','EP06 — C-322':'제6화 · C-322'};
  return map[t]||t;
 }
-function isMotion(a){return ['tenor','gif','official_gif'].includes(a.kind)||/\.gif(?:$|[?#])/i.test(a.url||'')}
+function isMotion(a){if(a.kind==='official_still')return false;return ['tenor','gif'].includes(a.kind)||(/\.gif(?:$|[?#])/i.test(a.url||'') && a.kind!=='official_still')}
 let controlsTimer=null, toastTimer=null;
 function showControls(delay=4200){
  const c=$('controls'); if(!c)return;
