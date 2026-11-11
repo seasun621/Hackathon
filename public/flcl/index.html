@@ -138,6 +138,38 @@ body.immersive .stage{top:clamp(92px,15vh,130px)}
 #preload-warning{display:none;color:#ffc4d3;line-height:1.55;font-size:13px}
 .preload-links{color:#8d96a7;font-size:12px}
 @media(max-width:640px){#preloader{padding:12px}.preload-card{border-radius:16px;padding:24px}.preload-actions button{flex:1}}
+
+/* Editorial interludes with native HTML/SVG (no external images required) */
+.stage.insight{inset:clamp(130px,18vh,180px) 5vw 9vh;display:flex;align-items:stretch;justify-content:center;overflow:hidden;background:transparent}
+.insight-shell{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);align-items:stretch;gap:clamp(12px,2.4vw,34px);height:100%;width:100%}
+.insight-copy{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:clamp(14px,2vh,25px);min-width:0;padding:clamp(10px,2vw,35px)}
+.insight-kicker{color:#f58fbb;font-size:clamp(12px,1vw,16px);font-weight:850;letter-spacing:.16em}
+.insight-main{color:#f6f3f7;font-size:clamp(27px,3.6vw,61px);font-weight:850;line-height:1.2;letter-spacing:-.052em;word-break:keep-all;overflow-wrap:anywhere}
+.insight-keys{display:flex;flex-wrap:wrap;gap:clamp(8px,1.1vw,14px)}
+.insight-key{display:inline-flex;align-items:center;max-width:100%;padding:clamp(8px,1vw,13px) clamp(12px,1.4vw,19px);border:1px solid #935c80;border-radius:12px;background:#352034a8;color:#ffe1eb;font-size:clamp(12px,1.08vw,18px);font-weight:650;line-height:1.35}
+.insight-figure{display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;overflow:hidden;border:1px solid #334257;border-radius:22px;background:radial-gradient(circle at 50% 45%,#132433 0,#090e17 76%);padding:clamp(15px,2vw,32px)}
+.insight-figure>.diagram-panel{background:transparent;border:0;width:100%;height:100%;padding:0}
+.insight-figure .diagram-label{font-size:clamp(13px,1.12vw,18px)}
+.insight-figure .diagram-foot{font-size:clamp(9px,.75vw,12px)}
+.insight-figure svg{max-height:76%;width:100%}
+.insight-shell.blue .insight-kicker{color:#8bbffe}
+.insight-shell.blue .insight-key{border-color:#4674a3;background:#183349af;color:#dcecff}
+@media(max-width:760px) and (orientation:portrait){
+ .stage.insight{inset:clamp(125px,17vh,155px) 10px 85px}
+ .insight-shell{grid-template-columns:1fr;grid-template-rows:minmax(0,.49fr) minmax(0,.51fr);gap:8px}
+ .insight-copy{padding:clamp(5px,2vw,20px);gap:10px;justify-content:center}
+ .insight-main{font-size:clamp(25px,6.6vw,43px)}
+ .insight-key{font-size:clamp(12px,3.1vw,16px);padding:7px 11px}
+ .insight-figure{padding:12px}
+ .insight-figure svg{max-height:72%}
+}
+@media(max-width:760px) and (orientation:landscape){
+ .stage.insight{inset:78px 16px 52px}
+ .insight-main{font-size:clamp(24px,4vw,44px)}
+ .insight-key{font-size:11px;padding:6px 9px}
+ .insight-copy{gap:7px}
+ .insight-figure{padding:9px}
+}
 </style></head><body>
 <div id="preloader" role="status" aria-live="polite"><div class="preload-card"><div class="preload-eyebrow">TSURUMAKI × FLCL · MEDIA PREPARATION</div><div class="preload-title" id="preload-title">발표 자료를 불러오고 있습니다</div><div class="preload-sub" id="preload-sub">GIF와 각 장면의 이미지를 모두 미리 준비한 다음 슬라이드를 엽니다.</div><div class="preload-track"><div id="preload-fill" class="preload-fill"></div></div><div class="preload-count" id="preload-count">장면 자료 확인 중…</div><div id="preload-warning"></div><div class="preload-actions" id="preload-actions" style="display:none"><button id="preload-retry" class="secondary" onclick="retryFailedMedia()">실패한 자료 다시 불러오기</button><button id="preload-continue" onclick="enterDeck()">현재 상태로 열기</button></div><div class="preload-links">불러올 수 없는 자료는 다른 영상으로 대체하지 않고 출처 링크를 표시합니다.</div></div></div>
 <div id="slide" class="slide"><div class="accentline"></div><header class="slide-head"><div id="chapter" class="chapter"></div><div class="headline"><span id="work" class="work"></span><span class="slash">/</span><span id="scene-title" class="scene-title"></span></div></header><div id="tag" class="tag"></div><div id="stage" class="stage solo"></div><div class="shadow"></div><div id="title" class="header"></div><div class="sources" id="sources"></div><div id="idx" class="idx"></div></div>
@@ -243,6 +275,36 @@ function renderDiagram(kind){
  const years=[1995,2000,2004,2007,2010,2013,2019,2022,2025];core=line(45,183,594,183,m);
  for(let i=0;i<years.length;i++){let x=52+i*67;core+=circle(x,183,years[i]===2000?12:8,years[i]===2000?p:b)+txt(x,225,String(years[i]),14,years[i]===2000?p:w);}
  core+=txt(312,106,'가이낙스 → 감독 데뷔 → 트리거',22);
+
+ }else if(kind==='orbit3d'){
+ label='3D 카메라 + 2D 캐릭터';
+ core='<ellipse cx="310" cy="174" rx="205" ry="100" fill="none" stroke="'+b+'" stroke-width="4" stroke-dasharray="9 8"/>';
+ core+='<rect x="262" y="118" width="96" height="114" rx="15" stroke="'+p+'" fill="#462139" stroke-width="4"/>';
+ core+=circle(310,147,21,w,.7)+line(285,191,335,191,w)+path('M500 153 Q460 68 340 75',p,true);
+ core+=rect(48,142,70,54,b,'#132b3a')+txt(84,176,'CAM',16)+txt(320,296,'회전하는 가상 카메라',20);
+ core+=txt(325,336,'입체 배경 · 와이어 가이드 · 2D 작화',16);
+ }else if(kind==='ellipsis'){
+ label='선택적으로 생략된 대화';
+ const xs=[63,148,233,318,403,488,573], nums=['1','2','3','4','5','6','7'];
+ for(let i=0;i<7;i++){
+  const faded=(i===3||i===5),c=faded?m:(i===6?p:b);
+  core+=rect(xs[i]-28,122,57,84,c,faded?'#10151c':(i===6?'#462139':'#173040'),faded);
+  core+=txt(xs[i],174,nums[i],29,c);
+  if(i<6)core+=line(xs[i]+33,145,xs[i+1]-32,145,faded?p:b,true);
+ }
+ core+=txt(318,264,'말하지 않아도 관객은 다음을 예상한다',20);
+ core+=txt(318,305,'4와 6을 생략',19,p);
+ }else if(kind==='three-pillars'){
+ label='기술이 감독의 선택으로 이어진다';
+ const terms=['콘티','편집','레이아웃'],xs=[123,320,517];
+ for(let i=0;i<3;i++){core+=circle(xs[i],167,62,i===1?p:b,.37)+txt(xs[i],176,terms[i],25);}
+ core+=path('M182 167 L249 167',p)+path('M386 167 L450 167',p)+txt(320,303,'한 컷이 아니라 흐름',22);
+ }else if(kind==='triad'){
+ label='세 가지 표현의 공존';
+ core+=rect(34,112,175,122,b,'#1a3245')+rect(232,82,175,152,p,'#4b2540')+rect(430,112,175,122,b,'#1a3245');
+ core+=txt(122,178,'정적',29)+txt(320,164,'동적',29)+txt(518,178,'과장',29);
+ core+=path('M208 172 L228 172',p)+path('M408 172 L428 172',p);
+ core+=txt(320,306,'한 작품 안에서 서로를 강조',20);
  }else{
  label='화면과 움직임의 구조';
  core=rect(90,90,460,180,b)+path('M130 220 Q310 65 510 200',p,true);
@@ -346,10 +408,25 @@ function assetNode(a){
  if(im.complete)queueMicrotask(checkImage);
  return d;
 }
+
+function renderInsight(s){
+ const shell=document.createElement('div');shell.className='insight-shell '+(s.flavor||'pink');
+ const copy=document.createElement('div');copy.className='insight-copy';
+ const kicker=document.createElement('div');kicker.className='insight-kicker';kicker.textContent=s.label||s.work||'KEY IDEA';
+ const title=document.createElement('div');title.className='insight-main';title.textContent=s.statement||s.title;
+ const keys=document.createElement('div');keys.className='insight-keys';
+ for(const k of (s.keywords||[])){const chip=document.createElement('span');chip.className='insight-key';chip.textContent=k;keys.appendChild(chip);}
+ copy.append(kicker,title,keys);
+ const fig=document.createElement('div');fig.className='insight-figure';
+ const graphic=document.createElement('div');graphic.className='diagram-panel';graphic.innerHTML=renderDiagram(s.diagram||'triad');
+ fig.appendChild(graphic);shell.append(copy,fig);return shell;
+}
+
 function render(){
  let s=DATA[at];const stage=$('stage');
  stage.innerHTML='';stage.className='stage '+s.layout;
- if(s.diagram){
+ if(s.format==='insight')stage.appendChild(renderInsight(s));
+ else if(s.diagram){
   stage.classList.add('has-diagram');
   if(s.assets.length>1)stage.classList.add('pair-diagram');
   const media=document.createElement('div');media.className='media-set';
@@ -359,11 +436,12 @@ function render(){
  }else s.assets.forEach(a=>stage.appendChild(assetNode(a)));
  $('chapter').textContent=PARTS[s.section]||s.section;$('work').textContent=workOf(s);$('scene-title').textContent=titleOf(s);
  const motion=s.assets.some(isMotion);
- $('tag').textContent=motion?'● GIF':(s.tag==='STILL'?'FRAME / REFERENCE':(s.tag==='PERSON'?'PERSON':(s.tag==='CHAPTER'?'CHAPTER':s.tag)));
+ $('tag').textContent=s.format==='insight'?'KEY IDEA':(motion?'● GIF':(s.tag==='STILL'?'FRAME / REFERENCE':(s.tag==='PERSON'?'PERSON':(s.tag==='CHAPTER'?'CHAPTER':s.tag))));
  $('title').textContent=s.title;$('idx').textContent=String(at+1).padStart(2,'0')+' / '+String(DATA.length).padStart(2,'0');
  $('progress').style.width=((at+1)/DATA.length*100)+'%'; $('slide').className='slide'+(s.tag==='OPENING'||s.tag==='CHAPTER'||s.tag==='ENDING'?' big-title':'');
  $('notes').innerHTML='<b>'+esc(s.title)+'</b><p>'+esc(s.note)+'</p><p class="duo-source">매체의 출처: '+esc(s.assets.map(a=>new URL(a.source).hostname).join(' · '))+'</p>';
- $('sources').innerHTML=s.assets.map((a,j)=>'<a href="'+esc(a.source)+'" target="_blank" rel="noopener">출처 '+(j+1)+' ↗</a>').join(' · ');
+ const listedSources=s.format==='insight'?(s.sources||[]):s.assets.map(a=>a.source);
+ $('sources').innerHTML=listedSources.filter(Boolean).map((u,j)=>'<a href="'+esc(u)+'" target="_blank" rel="noopener noreferrer">출처 '+(j+1)+' ↗</a>').join(' · ');
  if(s.assets.some(a=>a.kind==='tenor')){const w=document.createElement('script');w.src='https://tenor.com/embed.js?slide='+at;w.async=true;document.body.appendChild(w)}; location.hash='#'+(at+1); showControls();
 }
 function next(){at=Math.min(DATA.length-1,at+1);render()};function prev(){at=Math.max(0,at-1);render()};
