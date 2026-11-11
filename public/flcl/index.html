@@ -77,6 +77,50 @@ body.immersive .stage{top:clamp(92px,15vh,130px)}
   .controls button{height:36px;min-width:36px}
   .slide:after{height:95px}
 }
+
+/* Projection layout — 16:9, 4:3, tablet and smartphone */
+.stage.has-diagram{gap:min(2vw,26px);align-items:stretch;justify-content:space-between}
+.stage.has-diagram>.media-set{display:flex;align-items:center;justify-content:center;gap:1.3vw;min-width:0;min-height:0;flex:1;overflow:hidden}
+.stage.has-diagram>.media-set .item{min-width:0;max-height:100%;height:100%;flex:1 1 0;background:transparent}
+.stage.has-diagram>.media-set .item img{width:100%;height:100%;object-fit:contain}
+.stage.has-diagram>.media-set .item .tenor-gif-embed{max-width:100%;max-height:100%;overflow:auto}
+.stage.has-diagram:not(.pair-diagram)>.media-set{flex:0 0 64%}
+.stage.has-diagram:not(.pair-diagram)>.diagram-panel{flex:1 1 34%;width:34%}
+.stage.has-diagram.pair-diagram{flex-direction:column}
+.stage.has-diagram.pair-diagram>.media-set{flex:1 1 auto;height:71%;width:100%;gap:1.2vw}
+.stage.has-diagram.pair-diagram>.media-set .item{width:calc(50% - 1vw);max-height:100%}
+.stage.has-diagram.pair-diagram>.diagram-panel{height:27%;flex:0 0 27%;width:100%;padding:7px 16px;display:flex;flex-direction:row;align-items:center;gap:18px}
+.stage.has-diagram.pair-diagram>.diagram-panel .diagram-label{margin:0;flex:0 0 155px;line-height:1.5}
+.stage.has-diagram.pair-diagram>.diagram-panel svg{height:100%;width:auto;max-width:68%;flex:1 1 auto}
+.stage.has-diagram.pair-diagram>.diagram-panel .diagram-foot{margin:0;flex:0 0 110px}
+.diagram-panel{display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;min-width:0;min-height:0;padding:clamp(12px,1.8vw,24px);background:rgba(16,19,27,.94);border:1px solid rgba(255,255,255,.16);border-radius:13px;overflow:hidden}
+.diagram-label{color:#ffbed9;font-size:clamp(12px,1.1vw,16px);font-weight:780;letter-spacing:.02em;margin-bottom:10px}
+.diagram-panel svg{width:100%;height:auto;min-height:0;max-height:81%;overflow:visible;display:block}
+.diagram-foot{color:#9499a9;font-size:clamp(8px,.68vw,11px);letter-spacing:.03em;margin-top:12px}
+.stage.has-diagram .item:after{content:attr(data-side);position:absolute;right:10px;bottom:10px;pointer-events:none;font-size:clamp(10px,.75vw,12px);padding:5px 10px;background:#0b0e13dd;border-radius:6px;color:#fff}
+.stage.dual:not(.has-diagram) .item,.stage.triple:not(.has-diagram) .item{height:100%;max-height:100%;flex:1 1 0;min-width:0}
+@media(max-width:760px) and (orientation:landscape){
+ .stage.dual,.stage.triple{flex-direction:row}
+ .stage.dual .item,.stage.triple .item{width:auto;height:100%!important;max-height:100%!important}
+ .stage.has-diagram{flex-direction:row}
+ .stage.has-diagram:not(.pair-diagram)>.media-set{flex-basis:62%}
+ .stage.has-diagram:not(.pair-diagram)>.diagram-panel{flex-basis:35%}
+ .stage.has-diagram.pair-diagram{flex-direction:column}
+ .stage.has-diagram.pair-diagram>.media-set{flex:1 1 72%;height:72%}
+ .stage.has-diagram.pair-diagram>.diagram-panel{flex:0 0 25%;height:25%}
+}
+@media(max-width:760px) and (orientation:portrait){
+ .stage.has-diagram{flex-direction:column!important}
+ .stage.has-diagram>.media-set,.stage.has-diagram:not(.pair-diagram)>.media-set{height:58%;width:100%;flex:0 0 58%}
+ .stage.has-diagram>.diagram-panel,.stage.has-diagram:not(.pair-diagram)>.diagram-panel{height:39%;width:100%;flex:0 0 39%;padding:9px 12px}
+ .stage.has-diagram.pair-diagram>.media-set{height:65%;flex-basis:65%}
+ .stage.has-diagram.pair-diagram>.diagram-panel{height:32%;flex-basis:32%;gap:4px;padding:5px 8px}
+ .stage.has-diagram.pair-diagram>.diagram-panel .diagram-label{flex:0 0 70px;font-size:9px}
+ .stage.has-diagram.pair-diagram>.diagram-panel .diagram-foot{display:none}
+ .stage.has-diagram.pair-diagram>.diagram-panel svg{height:100%;max-width:none}
+ .diagram-panel svg{max-height:79%}
+ .stage.has-diagram>.media-set .item{width:auto;max-height:100%}
+}
 </style></head><body>
 <div id="slide" class="slide"><div class="accentline"></div><header class="slide-head"><div id="chapter" class="chapter"></div><div class="headline"><span id="work" class="work"></span><span class="slash">/</span><span id="scene-title" class="scene-title"></span></div></header><div id="tag" class="tag"></div><div id="stage" class="stage solo"></div><div class="shadow"></div><div id="title" class="header"></div><div class="sources" id="sources"></div><div id="idx" class="idx"></div></div>
 <nav id="controls" class="controls" aria-label="슬라이드 조작"><button class="primary-nav" onclick="prev()" aria-label="이전 슬라이드"><span class="key-icon">‹</span><span class="mobile-hide">이전</span></button><button onclick="toggleIndex()" aria-label="슬라이드 목차"><span class="key-icon">☷</span><span class="mobile-hide">목차</span></button><button onclick="toggleNotes()" aria-label="발표 노트"><span class="key-icon">ⓘ</span></button><span class="divider-control" aria-hidden="true"></span><button id="fullscreen-button" onclick="full()" aria-label="전체 화면"><span class="key-icon">⛶</span><span class="mobile-hide">전체화면</span></button><button class="primary-nav" onclick="next()" aria-label="다음 슬라이드"><span class="mobile-hide">다음</span><span class="key-icon">›</span></button></nav>
@@ -88,8 +132,9 @@ let at=0;
 const $=id=>document.getElementById(id);
 function esc(s){return String(s||'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));}
 
-const PARTS={"PROLOGUE":"OPENING · 츠루마키 × FLCL","01 / BEFORE":"PART 01 · 가이낙스에서 배운 연출","02 / FLCL":"PART 02 · 프리크리의 시각적 실험","03 / COLLABORATORS":"PART 03 · 작화가와 감독의 협업","04 / AFTER":"PART 04 · 프리크리 이후의 작품들","05 / LEGACY":"PART 05 · 후대에 남긴 표현","EPILOGUE":"ENDING · 새로운 세대의 출발점"};
+const PARTS={"03 / IMAISHI":"PART 03 · 이마이시 히로유키의 계보","PROLOGUE":"OPENING · 츠루마키 × FLCL","01 / BEFORE":"PART 01 · 가이낙스에서 배운 연출","02 / FLCL":"PART 02 · 프리크리의 시각적 실험","03 / COLLABORATORS":"PART 03 · 작화가와 감독의 협업","04 / AFTER":"PART 04 · 프리크리 이후의 작품들","05 / LEGACY":"PART 05 · 후대에 남긴 표현","EPILOGUE":"ENDING · 새로운 세대의 출발점"};
 function workOf(s){
+ if(s.work)return s.work;
  const t=s.title,sec=s.section;
  if(sec==='PROLOGUE'||sec==='EPILOGUE')return '츠루마키 카즈야 × FLCL';
  if(sec==='02 / FLCL'||sec==='03 / COLLABORATORS')return '프리크리 (FLCL) · 2000';
