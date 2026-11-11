@@ -121,7 +121,25 @@ body.immersive .stage{top:clamp(92px,15vh,130px)}
  .diagram-panel svg{max-height:79%}
  .stage.has-diagram>.media-set .item{width:auto;max-height:100%}
 }
+
+/* Initial media preparation gate: never show the deck while media is still resolving. */
+#preloader{position:fixed;inset:0;z-index:9999;background:#080a10;display:flex;align-items:center;justify-content:center;padding:24px;color:#f1f2f4}
+#preloader.hidden{display:none}
+.preload-card{width:min(100%,620px);display:flex;flex-direction:column;gap:18px;background:linear-gradient(140deg,#11151f,#0a0d14);padding:clamp(26px,5vw,48px);border-radius:24px;border:1px solid #41434c;box-shadow:0 18px 70px #0008}
+.preload-eyebrow{letter-spacing:.2em;text-transform:uppercase;color:#f58fbb;font-size:12px;font-weight:750}
+.preload-title{font-size:clamp(24px,5vw,39px);font-weight:830;line-height:1.25;letter-spacing:-.04em}
+.preload-sub{color:#b4bac9;font-size:clamp(13px,2.8vw,16px);line-height:1.65}
+.preload-track{height:9px;overflow:hidden;border-radius:99px;background:#323643}
+.preload-fill{height:100%;background:linear-gradient(90deg,#b96894,#ffa7c9);width:0%;transition:width .2s}
+.preload-count{color:#e5e5eb;font-size:14px;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+.preload-actions{display:flex;align-items:center;justify-content:flex-start;gap:10px;flex-wrap:wrap}
+.preload-actions button{background:#ec8fb5;border:0;border-radius:11px;padding:13px 21px;min-height:46px;color:#16151c;font-size:14px;font-weight:800;cursor:pointer}
+.preload-actions button.secondary{background:#292e3c;color:#f6f6fb;border:1px solid #565d6e}
+#preload-warning{display:none;color:#ffc4d3;line-height:1.55;font-size:13px}
+.preload-links{color:#8d96a7;font-size:12px}
+@media(max-width:640px){#preloader{padding:12px}.preload-card{border-radius:16px;padding:24px}.preload-actions button{flex:1}}
 </style></head><body>
+<div id="preloader" role="status" aria-live="polite"><div class="preload-card"><div class="preload-eyebrow">TSURUMAKI × FLCL · MEDIA PREPARATION</div><div class="preload-title" id="preload-title">발표 자료를 불러오고 있습니다</div><div class="preload-sub" id="preload-sub">GIF와 각 장면의 이미지를 모두 미리 준비한 다음 슬라이드를 엽니다.</div><div class="preload-track"><div id="preload-fill" class="preload-fill"></div></div><div class="preload-count" id="preload-count">장면 자료 확인 중…</div><div id="preload-warning"></div><div class="preload-actions" id="preload-actions" style="display:none"><button id="preload-retry" class="secondary" onclick="retryFailedMedia()">실패한 자료 다시 불러오기</button><button id="preload-continue" onclick="enterDeck()">현재 상태로 열기</button></div><div class="preload-links">불러올 수 없는 자료는 다른 영상으로 대체하지 않고 출처 링크를 표시합니다.</div></div></div>
 <div id="slide" class="slide"><div class="accentline"></div><header class="slide-head"><div id="chapter" class="chapter"></div><div class="headline"><span id="work" class="work"></span><span class="slash">/</span><span id="scene-title" class="scene-title"></span></div></header><div id="tag" class="tag"></div><div id="stage" class="stage solo"></div><div class="shadow"></div><div id="title" class="header"></div><div class="sources" id="sources"></div><div id="idx" class="idx"></div></div>
 <nav id="controls" class="controls" aria-label="슬라이드 조작"><button class="primary-nav" onclick="prev()" aria-label="이전 슬라이드"><span class="key-icon">‹</span><span class="mobile-hide">이전</span></button><button onclick="toggleIndex()" aria-label="슬라이드 목차"><span class="key-icon">☷</span><span class="mobile-hide">목차</span></button><button onclick="toggleNotes()" aria-label="발표 노트"><span class="key-icon">ⓘ</span></button><span class="divider-control" aria-hidden="true"></span><button id="fullscreen-button" onclick="full()" aria-label="전체 화면"><span class="key-icon">⛶</span><span class="mobile-hide">전체화면</span></button><button class="primary-nav" onclick="next()" aria-label="다음 슬라이드"><span class="mobile-hide">다음</span><span class="key-icon">›</span></button></nav>
 <div class="toast" id="toast" aria-live="polite"></div><div class="progress" id="progress"></div><div class="index" id="index"></div><div class="notes" id="notes"></div><div class="footer-help">← → 이동 · F 전체화면 · G 목차 · N 노트 · S 원본 · B 블랙 · H 도움말</div><div class="blank" id="blank"></div>
@@ -233,8 +251,60 @@ function renderDiagram(kind){
  return '<div class="diagram-label">'+esc(label)+'</div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="'+esc(label)+'">'+arrow+core+'</svg><div class="diagram-foot">연출 개념도 · 실제 장면 좌표와 무관</div>';
 }
 
+
+const preloadStatus=new Map();
+const preloadCache=new Map();
+const preloadFailureURLs=new Set();
+let preloading=false;
+function updatePreloadProgress(done,total){
+ $('preload-fill').style.width=(total?Math.min(100,Math.round(done/total*100)):100)+'%';
+ $('preload-count').textContent=done+' / '+total+'개 이미지 · '+(total?Math.round(done/total*100):100)+'%';
+}
+function preloadOneMedia(url,timeout=12500){
+ return new Promise(resolve=>{
+  let finished=false;const im=new Image();
+  im.referrerPolicy='no-referrer';im.decoding='async';
+  const timer=setTimeout(()=>finish(false),timeout);
+  function finish(ok){if(finished)return;finished=true;clearTimeout(timer);im.onload=null;im.onerror=null;
+    preloadStatus.set(url,ok);if(ok){preloadCache.set(url,im);preloadFailureURLs.delete(url)}
+    else {preloadCache.delete(url);preloadFailureURLs.add(url);im.src='';}
+    resolve(ok);}
+  im.onload=()=>finish(true);im.onerror=()=>finish(false);im.src=url;
+ });
+}
+async function preloadAllMedia(urls){
+ if(preloading)return;
+ preloading=true;$('preload-actions').style.display='none';$('preload-warning').style.display='none';
+ $('preload-title').textContent='발표 자료를 미리 불러오는 중';
+ $('preload-sub').textContent='정지 화면과 GIF를 확인하고 있습니다. 연결에 문제가 있는 자료는 다른 영상으로 대체하지 않습니다.';
+ const list=[...new Set(urls)].filter(Boolean);
+ let index=0,done=0;
+ updatePreloadProgress(0,list.length);
+ async function worker(){while(index<list.length){const nextIndex=index++;const url=list[nextIndex];await preloadOneMedia(url);done++;updatePreloadProgress(done,list.length);}}
+ await Promise.all(Array.from({length:Math.min(8,list.length)},worker));
+ preloading=false;
+ if(preloadFailureURLs.size===0){$('preload-title').textContent='모든 자료를 불러왔습니다';enterDeck();return;}
+ $('preload-title').textContent='자료 '+preloadFailureURLs.size+'개를 불러오지 못했습니다';
+ $('preload-sub').textContent='원본 사이트가 이미지 연결을 차단했거나 응답하지 않았습니다. 불러온 자료는 준비되어 있습니다.';
+ $('preload-warning').style.display='block';
+ $('preload-warning').textContent='실패한 항목을 재시도하거나, 해당 장면에 출처 링크만 표시하고 발표를 열 수 있습니다.';
+ $('preload-actions').style.display='flex';
+}
+function retryFailedMedia(){preloadAllMedia([...preloadFailureURLs])}
+function enterDeck(){$('preloader').classList.add('hidden');render();showControls();}
+function startDeck(){
+ const urls=DATA.flatMap(slide=>slide.assets.filter(a=>a.url&&a.kind!=='tenor').map(a=>a.url));
+ if(!urls.length){enterDeck();return}
+ preloadAllMedia(urls);
+}
+
 function assetNode(a){
  const d=document.createElement('div');d.className='item film';
+ if(preloadStatus.get(a.url)===false){
+  const fail=document.createElement('div');fail.className='broken';fail.style.display='flex';
+  fail.innerHTML='<b>원본 장면을 불러오지 못했습니다</b><p>이미지 제공처의 연결 오류 또는 차단입니다.</p><a target="_blank" rel="noopener" href="'+esc(a.source)+'">원본 출처 열기 ↗</a>';
+  d.appendChild(fail);return d;
+ }
  if(isMotion(a)){d.classList.add('motion');const mark=document.createElement('span');mark.className='gif-label';mark.textContent=a.kind==='tenor'?'GIF · 눌러서 재생':'GIF · 움직이는 컷';d.appendChild(mark);}
  if(a.kind==='tenor'){
   const widget=document.createElement('div');widget.className='tenor-gif-embed';widget.dataset.postid=a.url.split('/').pop();widget.dataset.shareMethod='host';widget.dataset.aspectRatio='1.77';widget.dataset.width='100%';widget.style.width='100%';widget.style.maxWidth='100%';
@@ -295,5 +365,5 @@ function toggleNotes(){$('notes').classList.toggle('visible')};
 function currentSource(){let a=DATA[at].assets[0];window.open(a.source,'_blank','noopener')};
 window.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();next()};if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();prev()};if(e.key.toLowerCase()==='f')full();if(e.key.toLowerCase()==='g')toggleIndex();if(e.key.toLowerCase()==='n')toggleNotes();if(e.key.toLowerCase()==='s')currentSource();if(e.key.toLowerCase()==='b')document.body.classList.toggle('blanked');if(e.key.toLowerCase()==='h')$('help').style.display=$('help').style.display==='none'?'block':'none';if(e.key==='Escape'){$('index').classList.remove('visible');$('notes').classList.remove('visible');$('help').style.display='none';document.body.classList.remove('blanked')}});
 let touch=0;window.addEventListener('touchstart',e=>touch=e.touches[0].clientX,{passive:true});window.addEventListener('touchend',e=>{let delta=e.changedTouches[0].clientX-touch;if(delta<-60)next();if(delta>60)prev()},{passive:true});
-if(window.location.hash){let n=parseInt(window.location.hash.slice(1));if(n>0&&n<=DATA.length)at=n-1};render();
+if(window.location.hash){let n=parseInt(window.location.hash.slice(1));if(n>0&&n<=DATA.length)at=n-1};startDeck();
 </script></body></html>
